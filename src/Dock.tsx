@@ -1511,13 +1511,13 @@ const Dock = memo(function Dock() {
 														const isVeloraOrSettings =
 															app.name.toLowerCase() === "settings" ||
 															app.name.toLowerCase() === "velora" ||
-															app.name.toLowerCase() === "velora" ||
-															app.path.toLowerCase().includes("velora.exe") ||
 															app.path.toLowerCase().includes("velora.exe");
 
-														return icon ? (
+														const finalIcon = isVeloraOrSettings ? "/velora.png" : icon;
+
+														return finalIcon ? (
 															<img
-																src={icon}
+																src={finalIcon}
 																alt={app.name}
 																className={isVeloraOrSettings ? "velora-icon-img" : ""}
 																draggable={false}
@@ -1671,12 +1671,13 @@ const Dock = memo(function Dock() {
 												const isVeloraOrSettings =
 													app.name.toLowerCase() === "settings" ||
 													app.name.toLowerCase() === "velora" ||
-													app.name.toLowerCase() === "velora" ||
-													app.path.toLowerCase().includes("velora.exe") ||
 													app.path.toLowerCase().includes("velora.exe");
-												return icon ? (
+
+												const finalIcon = isVeloraOrSettings ? "/velora.png" : icon;
+
+												return finalIcon ? (
 													<img
-														src={icon}
+														src={finalIcon}
 														alt={app.name}
 														className={isVeloraOrSettings ? "velora-icon-img" : ""}
 														draggable={false}

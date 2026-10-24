@@ -673,10 +673,6 @@ body {
 	font-weight: 500;
 }
 
-/* Invert Velora logo / Settings icon in light mode */
-.light-mode .velora-icon-img {
-	filter: invert(1) brightness(0.15) contrast(1.2);
-}
 
 /* Light mode overrides for Dock */
 .light-mode .dock-icon {
