@@ -677,10 +677,12 @@ pub async fn open_app(app: AppHandle, app_name: String) {
 fn is_velora_launch_target(target: &str, identifier: &str) -> bool {
     target == "velora-settings"
         || target.eq_ignore_ascii_case(identifier)
-        || std::path::Path::new(target).file_name().is_some_and(|name| {
-            let s = name.to_string_lossy();
-            s.eq_ignore_ascii_case("velora.exe")
-        })
+        || std::path::Path::new(target)
+            .file_name()
+            .is_some_and(|name| {
+                let s = name.to_string_lossy();
+                s.eq_ignore_ascii_case("velora.exe")
+            })
 }
 
 /// Launches another instance of an app instead of focusing an existing window.
@@ -3819,7 +3821,9 @@ fn apply_imported_settings(app: &AppHandle, settings: &str) -> Result<(), String
     // as reset_settings are kept.
     let keep = ["velora-first-run", "velora-app-version"];
     for key in previous.keys().filter(|key| {
-        (key.starts_with("velora-")) && !keep.contains(&key.as_str()) && !imported.contains_key(*key)
+        (key.starts_with("velora-"))
+            && !keep.contains(&key.as_str())
+            && !imported.contains_key(*key)
     }) {
         let _ = app.emit(
             "settings-external-changed",
@@ -4146,14 +4150,17 @@ mod pwa_icon_tests {
 
     #[test]
     fn velora_launch_targets_reuse_the_running_settings_window() {
-        let identifier = "com.sehaz.velora";
+        let identifier = "com.veltrex.devs.velora";
         assert!(is_velora_launch_target(identifier, identifier));
         assert!(is_velora_launch_target("velora-settings", identifier));
         assert!(is_velora_launch_target(
             "C:\\Users\\test\\AppData\\Local\\velora\\velora.exe",
             identifier
         ));
-        assert!(!is_velora_launch_target("C:\\Apps\\Discord.exe", identifier));
+        assert!(!is_velora_launch_target(
+            "C:\\Apps\\Discord.exe",
+            identifier
+        ));
         assert!(!is_velora_launch_target("com.other.app", identifier));
     }
 

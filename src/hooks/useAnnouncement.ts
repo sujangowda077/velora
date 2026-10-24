@@ -10,7 +10,7 @@ export interface Announcement {
 	url?: string;
 }
 
-const ENDPOINT = "https://velora.sehaz.space/announcements.json";
+const ENDPOINT = "https://raw.githubusercontent.com/sujangowda077/velora/main/website/public/announcements.json";
 const CACHE_KEY = "velora-announcement-cache";
 const CACHE_AT_KEY = "velora-announcement-cache-at";
 const DISMISSED_KEY = "velora-announcement-dismissed";

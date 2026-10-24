@@ -143,12 +143,12 @@ MpCmdRun.exe -SignatureUpdate
 
 ## Get It Running
 
-**Download** the latest build from [Releases](https://github.com/SehajveerSingh2005/velora/releases/latest).
+**Download** the latest build from [Releases](https://github.com/sujangowda077/velora/releases/latest).
 
 Or build from source:
 
 ```bash
-git clone https://github.com/SehajveerSingh2005/velora.git
+git clone https://github.com/sujangowda077/velora.git
 cd velora
 bun install
 bun run tauri dev

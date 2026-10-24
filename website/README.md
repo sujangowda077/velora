@@ -74,7 +74,7 @@ export default defineConfig([
 
 ## Announcements
 
-`public/announcements.json` is polled once per day by the Velora app (3.9.1+) and shown as a persistent notch card and a Settings banner until dismissed. It is served at `https://velora.sehaz.space/announcements.json`.
+`public/announcements.json` is polled once per day by the Velora app (3.9.1+) and shown as a persistent notch card and a Settings banner until dismissed. It is served at `https://raw.githubusercontent.com/sujangowda077/velora/main/website/public/announcements.json`.
 
 Publish one by replacing the contents:
 

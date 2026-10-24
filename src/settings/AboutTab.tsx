@@ -78,11 +78,11 @@ export function AboutTab({
 					Made with <span className="about-heart">❤️</span> by{" "}
 					<button
 						className="about-author"
-						onClick={() => openUrl("https://github.com/SehajveerSingh2005")}
-						title="sehaz on GitHub"
+						onClick={() => openUrl("https://github.com/sujangowda077")}
+						title="sujan on GitHub"
 					>
 						<GithubIcon size={12} />
-						<span>sehaz</span>
+						<span>sujan</span>
 					</button>
 				</p>
 			</div>

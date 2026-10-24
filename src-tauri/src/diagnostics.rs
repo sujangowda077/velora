@@ -11,7 +11,7 @@ pub fn initialize() {
     let Some(local_data) = std::env::var_os("LOCALAPPDATA") else {
         return;
     };
-    let directory = PathBuf::from(local_data).join("com.sehaz.velora");
+    let directory = PathBuf::from(local_data).join("com.veltrex.devs.velora");
     if fs::create_dir_all(&directory).is_err() {
         return;
     }

@@ -222,7 +222,7 @@ const Dock = memo(function Dock() {
 	const dockRef = useRef<HTMLDivElement>(null);
 	const [popupBottom, setPopupBottom] = useState(56);
 	const pinnedItemsRef = useRef<AppInfo[]>([]);
-	const handleAppClickRef = useRef<(app: AppInfo) => void>(() => {});
+	const handleAppClickRef = useRef<(app: AppInfo) => void>(() => { });
 	const [scale, setScale] = useState(() =>
 		parseFloat(localStorage.getItem("velora-scale") || "1.0")
 	);
@@ -291,7 +291,7 @@ const Dock = memo(function Dock() {
 					setTimeout(() => setStartupAnimating(false), 1500);
 					return true;
 				}
-			} catch (_) {}
+			} catch (_) { }
 			return false;
 		};
 
@@ -331,7 +331,7 @@ const Dock = memo(function Dock() {
 						width: Math.round(rect.width) + (hasPreview ? 1000 : 0),
 						height: Math.round(rect.height) + (hasPreview ? 320 : 0)
 					}
-				}).catch(() => {});
+				}).catch(() => { });
 			}
 		};
 
@@ -392,13 +392,13 @@ const Dock = memo(function Dock() {
 
 			// Warm the installed-apps cache in the background so the add-app
 			// popup opens with data ready instead of waiting on the scan.
-			invoke<AppInfo[]>("get_installed_apps").catch(() => {});
+			invoke<AppInfo[]>("get_installed_apps").catch(() => { });
 
 			// Load custom icons
 			try {
 				const icons = await invoke<Record<string, string>>("get_custom_icons");
 				setCustomIcons(icons);
-			} catch (_) {}
+			} catch (_) { }
 		};
 		init();
 
@@ -417,7 +417,7 @@ const Dock = memo(function Dock() {
 					});
 					return next;
 				});
-			} catch (_) {}
+			} catch (_) { }
 		});
 
 		const unlistenOverlap = listen<boolean>("dock-overlap", (event) => {
@@ -819,12 +819,12 @@ const Dock = memo(function Dock() {
 	const closeMenu = () => {
 		setContextMenu(null);
 		setActiveSubmenu(null);
-		invoke("set_menu_open", { open: false, rect: null }).catch(() => {});
+		invoke("set_menu_open", { open: false, rect: null }).catch(() => { });
 	};
 
 	const closePopup = () => {
 		setShowAddPopup(false);
-		invoke("set_menu_open", { open: false, rect: null }).catch(() => {});
+		invoke("set_menu_open", { open: false, rect: null }).catch(() => { });
 	};
 
 	// A press outside the dock while a menu or the Add App popup is open. The
@@ -846,7 +846,7 @@ const Dock = memo(function Dock() {
 	const sendDockRegion = useMemo(
 		() =>
 			createRegionSender((rects) => {
-				invoke("set_window_region", { rects }).catch(() => {});
+				invoke("set_window_region", { rects }).catch(() => { });
 			}),
 		[]
 	);
@@ -916,7 +916,7 @@ const Dock = memo(function Dock() {
 			open = true;
 		}
 
-		invoke("set_menu_open", { open, rect }).catch(() => {});
+		invoke("set_menu_open", { open, rect }).catch(() => { });
 	}, [contextMenu, menuPos, showAddPopup, pinnedApps, activeApps, activeSubmenu, scale]);
 
 	const dockItems = useMemo(() => {
@@ -979,7 +979,7 @@ const Dock = memo(function Dock() {
 			}
 
 			// A pinned shell id and a visible window can have different paths
-			// (for example com.sehaz.velora and velora.exe). Match both visible
+			// (for example com.sujan.velora and velora.exe). Match both visible
 			// and background apps so the window cannot become a second dock item.
 			const equivalent = activeApps.find(
 				(app) => !matchedRunningKeys.has(itemKey(app)) && isSameApp(p, app)
@@ -1074,7 +1074,7 @@ const Dock = memo(function Dock() {
 	useEffect(() => {
 		// Only report true dock-window hover, not the edge-hover from Rust,
 		// to avoid a feedback loop that keeps the dock open.
-		invoke("set_dock_hovered", { hovered: isDockHovered }).catch(() => {});
+		invoke("set_dock_hovered", { hovered: isDockHovered }).catch(() => { });
 	}, [isDockHovered]);
 
 	useEffect(() => {
@@ -1115,7 +1115,7 @@ const Dock = memo(function Dock() {
 										const [image, lastFocused] = res;
 										return { hwnd, title, image, lastFocused };
 									}
-								} catch {}
+								} catch { }
 								return null;
 							})
 						);
@@ -1283,8 +1283,8 @@ const Dock = memo(function Dock() {
 									>
 										{(!dockPreviewEnabled ||
 											(dockPreviewEnabled && hoveredApp === itemKey(startItem))) && (
-											<div className="tooltip">{startItem.name}</div>
-										)}
+												<div className="tooltip">{startItem.name}</div>
+											)}
 										<motion.div
 											className="dock-icon"
 											variants={iconVariants}
@@ -1471,8 +1471,8 @@ const Dock = memo(function Dock() {
 												{/* Fallback to text tooltip if previews are disabled, app isn't running, or preview failed to load */}
 												{(!dockPreviewEnabled ||
 													(dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && (
-													<div className="tooltip">{app.name}</div>
-												)}
+														<div className="tooltip">{app.name}</div>
+													)}
 												<motion.div
 													className="dock-icon"
 													variants={iconVariants}
@@ -1635,8 +1635,8 @@ const Dock = memo(function Dock() {
 										</AnimatePresence>
 										{(!dockPreviewEnabled ||
 											(dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && (
-											<div className="tooltip">{app.name}</div>
-										)}
+												<div className="tooltip">{app.name}</div>
+											)}
 										<motion.div
 											className="dock-icon"
 											variants={iconVariants}
@@ -1727,14 +1727,14 @@ const Dock = memo(function Dock() {
 					{!contextMenu.extra &&
 						!contextMenu.taskView &&
 						(!contextMenu.app || contextMenu.app.path === "start") && (
-						<div
-							style={{
-								maxHeight: Math.max(64, window.innerHeight / scale - 200),
-								overflowY: "auto"
-							}}
-						>
-							{(contextMenu.app
-								? [
+							<div
+								style={{
+									maxHeight: Math.max(64, window.innerHeight / scale - 200),
+									overflowY: "auto"
+								}}
+							>
+								{(contextMenu.app
+									? [
 										["installed-apps", "Installed Apps"],
 										["power-options", "Power Options"],
 										["device-manager", "Device Manager"],
@@ -1744,25 +1744,25 @@ const Dock = memo(function Dock() {
 										["task-manager", "Task Manager"],
 										["settings", "Settings"]
 									]
-								: [
+									: [
 										["task-manager", "Task Manager"],
 										["taskbar-settings", "Taskbar Settings"]
 									]
-							).map(([action, label]) => (
-								<div
-									key={action}
-									className="menu-item"
-									onClick={() => {
-										closeMenu();
-										invoke("open_system_action", { action }).catch(showActionError);
-									}}
-								>
-									{label}
-								</div>
-							))}
-							<div className="menu-divider" />
-						</div>
-					)}
+								).map(([action, label]) => (
+									<div
+										key={action}
+										className="menu-item"
+										onClick={() => {
+											closeMenu();
+											invoke("open_system_action", { action }).catch(showActionError);
+										}}
+									>
+										{label}
+									</div>
+								))}
+								<div className="menu-divider" />
+							</div>
+						)}
 					{contextMenu.extra ? (
 						<>
 							<div

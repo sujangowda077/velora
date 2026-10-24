@@ -15,7 +15,7 @@ Please do not report security vulnerabilities in public issues or discussions.
 
 Report privately through GitHub's private vulnerability reporting:
 
-https://github.com/SehajveerSingh2005/velora/security/advisories/new
+https://github.com/sujangowda077/velora/security/advisories/new
 
 Include as much of the following as you can:
 

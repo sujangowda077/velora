@@ -96,6 +96,6 @@ describe("dock extras folder settings", () => {
 	test("folder name falls back to the path and handles separators", () => {
 		expect(folderNameFromPath("D:\\Projects")).toBe("Projects");
 		expect(folderNameFromPath("E:\\Media\\")).toBe("Media");
-		expect(folderNameFromPath("C:/Users/sehaj/Documents")).toBe("Documents");
+		expect(folderNameFromPath("C:/Users/username/Documents")).toBe("Documents");
 	});
 });
