@@ -53,7 +53,30 @@ import {
 	ChevronLeft,
 	ChevronRight,
 	Inbox,
-	Music
+	Music,
+	Plane,
+	Sun,
+	Cast,
+	ScreenShare,
+	Radio,
+	Accessibility,
+	Share2,
+	Wifi as LucideWifi,
+	Bluetooth as LucideBluetooth,
+	Monitor,
+	Sliders,
+	Settings as SettingsIconLucide,
+	Moon,
+	Sparkles,
+	Palette,
+	Eye,
+	Keyboard,
+	Crop,
+	MapPin,
+	BatteryCharging,
+	BellOff,
+	Pencil,
+	Power
 } from "lucide-react";
 
 /**
@@ -151,27 +174,6 @@ const playTimerChime = () => {
 };
 
 // Simple SVG icons
-function WifiIcon({ enabled, connected }: { enabled: boolean; connected: boolean }) {
-	return (
-		<svg
-			width="18"
-			height="18"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2.5"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			opacity={!enabled ? 0.4 : connected ? 1 : 0.7}
-		>
-			<path d="M5 12.55a11 11 0 0 1 14.08 0" />
-			<path d="M1.42 9a16 16 0 0 1 21.16 0" />
-			<path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
-			<line x1="12" y1="20" x2="12.01" y2="20" />
-		</svg>
-	);
-}
-
 function TrayIcon() {
 	return (
 		<svg
@@ -608,6 +610,17 @@ function App() {
 	// Names of connected Bluetooth devices, for the controls tile.
 	const [btConnectedNames, setBtConnectedNames] = useState<string[]>([]);
 	const [batterySaverEnabled, setBatterySaverEnabled] = useState(false);
+	const [airplaneMode, setAirplaneMode] = useState(false);
+	const [nightLight, setNightLight] = useState(false);
+	const [nearbySharing, setNearbySharing] = useState<number>(0);
+	const [mobileHotspot, setMobileHotspot] = useState(false);
+	const [accessibilityActive, setAccessibilityActive] = useState(false);
+	const [quickCenterTab, setQuickCenterTab] = useState<"connectivity" | "display" | "system">("connectivity");
+	const [darkMode, setDarkMode] = useState(true);
+	const [locationActive, setLocationActive] = useState(true);
+	const [eyeCareActive, setEyeCareActive] = useState(false);
+	const [hdrActive, setHdrActive] = useState(false);
+	const [rotationLocked, setRotationLocked] = useState(false);
 	const [currentBrightness, setCurrentBrightness] = useState(50);
 
 	// System metrics for status widgets
@@ -2178,13 +2191,28 @@ function App() {
 		};
 	}, [refreshWifiStatus]);
 
-	// Load bluetooth/volume/brightness state on mount
+	// Load bluetooth/volume/brightness/quick-settings state on mount
 	useEffect(() => {
 		invoke<boolean>("get_bluetooth_state")
 			.then(setBluetoothEnabled)
 			.catch(() => {});
 		invoke<boolean>("get_battery_saver_state")
 			.then(setBatterySaverEnabled)
+			.catch(() => {});
+		invoke<boolean>("get_airplane_mode_state")
+			.then(setAirplaneMode)
+			.catch(() => {});
+		invoke<boolean>("get_night_light_state")
+			.then(setNightLight)
+			.catch(() => {});
+		invoke<number>("get_nearby_sharing_state")
+			.then(setNearbySharing)
+			.catch(() => {});
+		invoke<boolean>("get_mobile_hotspot_state")
+			.then(setMobileHotspot)
+			.catch(() => {});
+		invoke<boolean>("get_dark_mode_state")
+			.then(setDarkMode)
 			.catch(() => {});
 		invoke<{ volume: number; is_muted: boolean }>("get_volume_state")
 			.then((state) => {
@@ -2196,21 +2224,47 @@ function App() {
 			.then(setCurrentBrightness)
 			.catch(() => {});
 
-		// Poll battery saver state every 5s (since we can't listen for changes)
+		// Poll battery saver and system states every 5s
 		const interval = setInterval(() => {
 			invoke<boolean>("get_battery_saver_state")
 				.then(setBatterySaverEnabled)
+				.catch(() => {});
+			invoke<boolean>("get_airplane_mode_state")
+				.then(setAirplaneMode)
+				.catch(() => {});
+			invoke<boolean>("get_night_light_state")
+				.then(setNightLight)
+				.catch(() => {});
+			invoke<boolean>("get_mobile_hotspot_state")
+				.then(setMobileHotspot)
+				.catch(() => {});
+			invoke<boolean>("get_dark_mode_state")
+				.then(setDarkMode)
 				.catch(() => {});
 		}, 5000);
 		return () => clearInterval(interval);
 	}, []);
 
-	// Refresh Wi-Fi status while the command center is open so changes made
+	// Refresh Wi-Fi and quick settings status while the command center is open so changes made
 	// outside Velora (keyboard toggle, Windows quick settings) show up.
 	useEffect(() => {
 		if (veloraMode !== "command-center") return;
 		void refreshWifiStatus();
-		const interval = setInterval(() => void refreshWifiStatus(), 5000);
+		invoke<boolean>("get_airplane_mode_state").then(setAirplaneMode).catch(() => {});
+		invoke<boolean>("get_night_light_state").then(setNightLight).catch(() => {});
+		invoke<number>("get_nearby_sharing_state").then(setNearbySharing).catch(() => {});
+		invoke<boolean>("get_battery_saver_state").then(setBatterySaverEnabled).catch(() => {});
+		invoke<boolean>("get_bluetooth_state").then(setBluetoothEnabled).catch(() => {});
+		invoke<boolean>("get_mobile_hotspot_state").then(setMobileHotspot).catch(() => {});
+
+		const interval = setInterval(() => {
+			void refreshWifiStatus();
+			invoke<boolean>("get_airplane_mode_state").then(setAirplaneMode).catch(() => {});
+			invoke<boolean>("get_night_light_state").then(setNightLight).catch(() => {});
+			invoke<number>("get_nearby_sharing_state").then(setNearbySharing).catch(() => {});
+			invoke<boolean>("get_battery_saver_state").then(setBatterySaverEnabled).catch(() => {});
+			invoke<boolean>("get_mobile_hotspot_state").then(setMobileHotspot).catch(() => {});
+		}, 3000);
 		return () => clearInterval(interval);
 	}, [veloraMode, refreshWifiStatus]);
 
@@ -2391,6 +2445,90 @@ function App() {
 		}
 	}, [bluetoothEnabled]);
 
+	// Airplane mode toggle
+	const toggleAirplaneMode = useCallback(async () => {
+		try {
+			const target = await invoke<boolean>("toggle_airplane_mode");
+			setAirplaneMode(target);
+			if (target) {
+				setWifiStatus((prev) => (prev ? { ...prev, enabled: false, connected: false } : null));
+				setBluetoothEnabled(false);
+			} else {
+				setTimeout(() => void refreshWifiStatus(), 1000);
+				invoke<boolean>("get_bluetooth_state")
+					.then(setBluetoothEnabled)
+					.catch(() => {});
+			}
+		} catch (e) {
+			console.error("Failed to toggle airplane mode:", e);
+		}
+	}, [refreshWifiStatus]);
+
+	// Nearby sharing toggle
+	const toggleNearbySharingAction = useCallback(async () => {
+		try {
+			const next = await invoke<number>("toggle_nearby_sharing");
+			setNearbySharing(next);
+		} catch (e) {
+			console.error("Failed to toggle nearby sharing:", e);
+		}
+	}, []);
+
+	// Night light toggle
+	const toggleNightLightAction = useCallback(async () => {
+		try {
+			setNightLight((prev) => !prev);
+			const target = await invoke<boolean>("toggle_night_light");
+			setNightLight(target);
+		} catch (e) {
+			console.error("Failed to toggle night light:", e);
+		}
+	}, []);
+
+	// Energy Saver toggle
+	const toggleBatterySaverAction = useCallback(async () => {
+		try {
+			setBatterySaverEnabled((prev) => !prev);
+			const target = await invoke<boolean>("toggle_battery_saver");
+			setBatterySaverEnabled(target);
+		} catch (e) {
+			console.error("Failed to toggle battery saver:", e);
+		}
+	}, []);
+
+	// Mobile hotspot toggle
+	const toggleMobileHotspotAction = useCallback(async () => {
+		try {
+			setMobileHotspot((prev) => !prev);
+			const target = await invoke<boolean>("toggle_mobile_hotspot");
+			setMobileHotspot(target);
+		} catch (e) {
+			console.error("Failed to toggle mobile hotspot:", e);
+		}
+	}, []);
+
+	// Accessibility toggle
+	const toggleAccessibilityAction = useCallback(async () => {
+		try {
+			setAccessibilityActive((prev) => !prev);
+			const target = await invoke<boolean>("toggle_accessibility");
+			setAccessibilityActive(target);
+		} catch (e) {
+			console.error("Failed to toggle accessibility:", e);
+		}
+	}, []);
+
+	// Dark mode toggle
+	const toggleDarkModeAction = useCallback(async () => {
+		try {
+			setDarkMode((prev) => !prev);
+			const target = await invoke<boolean>("toggle_dark_mode");
+			setDarkMode(target);
+		} catch (e) {
+			console.error("Failed to toggle dark mode:", e);
+		}
+	}, []);
+
 	// The notch never takes focus, and native `title` tooltips only show for an
 	// active window, so the status widgets draw their own. A tooltip opens
 	// after a tooltip-like delay, by which time the battery details fetched on
@@ -2523,22 +2661,6 @@ function App() {
 			}
 		},
 		[dockMode]
-	);
-
-	const toggleNotchModeSetting = useCallback(
-		async (e: React.MouseEvent) => {
-			e.stopPropagation();
-			const nextMode = notchMode === "fixed" ? "smart" : notchMode === "smart" ? "peek" : "fixed";
-			setNotchMode(nextMode);
-			localStorage.setItem("velora-notch-mode", nextMode);
-			invoke("save_setting", { key: "velora-notch-mode", value: nextMode }).catch(console.error);
-			try {
-				await invoke("change_notch_mode", { mode: nextMode });
-			} catch (err) {
-				console.error("Failed to change notch mode:", err);
-			}
-		},
-		[notchMode]
 	);
 
 	const handleBluetoothRightClick = useCallback((e: React.MouseEvent) => {
@@ -2718,8 +2840,8 @@ function App() {
 		if (veloraMode === "announcement" && announcement && !announcementDismissed) return 380;
 		if (isCalendarMode) return 480;
 		if (veloraMode === "shelf") return 380;
-		if (veloraMode === "command-center" && isOpen) return 350;
-		if (veloraMode === "wifi" || veloraMode === "bluetooth") return 350;
+		if (veloraMode === "command-center" && isOpen) return 560;
+		if (veloraMode === "wifi" || veloraMode === "bluetooth") return 360;
 		if (showMusicOnStatusHover) {
 			return 170 + (settingsVisualizerEnabled ? 30 : 0);
 		}
@@ -2756,7 +2878,7 @@ function App() {
 			if (shelfItems.length === 0) return 130;
 			return shelfOverflowing ? 190 : 176;
 		}
-		if (veloraMode === "command-center") return isOpen ? 230 : 36;
+		if (veloraMode === "command-center") return isOpen ? 250 : 36;
 		if (veloraMode === "wifi" || veloraMode === "bluetooth") return 300;
 		if (veloraMode === "status") return 36;
 		if (isMusicMode && isOpen) {
@@ -3517,245 +3639,763 @@ function App() {
 											exit={{ opacity: 0, filter: "blur(4px)", transition: { duration: 0.1 } }}
 											transition={{ type: "spring", stiffness: 400, damping: 30 }}
 										>
-											{/* Pills Grid */}
-											<div className="cc-pills-grid">
-												{/* Wi-Fi Pill */}
-												<div
-													className={`cc-pill-tile ${wifiEnabled ? "active" : ""}`}
-													onClick={(e) => {
-														e.stopPropagation();
-														toggleWifi();
-													}}
-													onContextMenu={handleWifiRightClick}
-													title="Left-click to toggle, Right-click for networks"
-												>
-													<div className="cc-pill-icon-wrapper">
-														<WifiIcon enabled={wifiEnabled} connected={wifiConnected} />
-													</div>
-													<div className="cc-pill-info">
-														<span className="cc-pill-title">Wi-Fi</span>
-														<span className="cc-pill-status">
-															{wifiStatus === null
-																? "…"
-																: !wifiEnabled
-																	? "Off"
-																	: wifiConnected
-																		? (wifiStatus?.ssid ?? "Connected")
-																		: "Not connected"}
-														</span>
-													</div>
+											{/* Tabbed Quick Center Header */}
+											<div className="tqc-header">
+												<div className="tqc-tabs-bar">
 													<button
-														className="cc-pill-more"
-														aria-label="Wi-Fi networks"
-														title="Wi-Fi networks"
+														className={`tqc-tab-btn ${quickCenterTab === "connectivity" ? "active" : ""}`}
 														onClick={(e) => {
 															e.stopPropagation();
-															setVeloraMode("wifi");
+															setQuickCenterTab("connectivity");
 														}}
 													>
-														<ChevronRight />
+														<LucideWifi size={12} />
+														<span>Connectivity</span>
 													</button>
-												</div>
-
-												{/* Dock Mode Pill */}
-												<div
-													className={`cc-pill-tile ${dockMode === "fixed" ? "active" : ""}`}
-													onClick={toggleDockModeSetting}
-													title="Cycle dock mode: Fixed / Smart / Peek"
-												>
-													<div className="cc-pill-icon-wrapper">
-														<DockIcon />
-													</div>
-													<div className="cc-pill-info">
-														<span className="cc-pill-title">Dock Mode</span>
-														<span className="cc-pill-status">
-															{dockMode === "fixed"
-																? "Fixed"
-																: dockMode === "smart"
-																	? "Smart"
-																	: "Peek"}
-														</span>
-													</div>
-												</div>
-
-												{/* Bluetooth Pill */}
-												<div
-													className={`cc-pill-tile ${bluetoothEnabled ? "active" : ""}`}
-													onClick={(e) => {
-														e.stopPropagation();
-														toggleBluetooth();
-													}}
-													onContextMenu={handleBluetoothRightClick}
-													title="Left-click to toggle, Right-click for devices"
-												>
-													<div className="cc-pill-icon-wrapper">
-														<BluetoothIcon />
-													</div>
-													<div className="cc-pill-info">
-														<span className="cc-pill-title">Bluetooth</span>
-														<span className="cc-pill-status">
-															{!bluetoothEnabled
-																? "Off"
-																: btConnectedNames.length === 1
-																	? btConnectedNames[0]
-																	: btConnectedNames.length > 1
-																		? `${btConnectedNames.length} connected`
-																		: "On"}
-														</span>
-													</div>
 													<button
-														className="cc-pill-more"
-														aria-label="Bluetooth devices"
-														title="Bluetooth devices"
+														className={`tqc-tab-btn ${quickCenterTab === "display" ? "active" : ""}`}
 														onClick={(e) => {
 															e.stopPropagation();
-															setVeloraMode("bluetooth");
+															setQuickCenterTab("display");
 														}}
 													>
-														<ChevronRight />
+														<Monitor size={12} />
+														<span>Display</span>
+													</button>
+													<button
+														className={`tqc-tab-btn ${quickCenterTab === "system" ? "active" : ""}`}
+														onClick={(e) => {
+															e.stopPropagation();
+															setQuickCenterTab("system");
+														}}
+													>
+														<Sliders size={12} />
+														<span>System</span>
 													</button>
 												</div>
-
-												{/* Notch Mode Pill */}
-												<div
-													className={`cc-pill-tile ${notchMode === "fixed" ? "active" : ""}`}
-													onClick={toggleNotchModeSetting}
-													title="Cycle notch mode: Fixed / Smart / Peek"
-												>
-													<div className="cc-pill-icon-wrapper">
-														<NotchIcon />
-													</div>
-													<div className="cc-pill-info">
-														<span className="cc-pill-title">Notch Mode</span>
-														<span className="cc-pill-status">
-															{notchMode === "fixed"
-																? "Fixed"
-																: notchMode === "smart"
-																	? "Smart"
-																	: "Peek"}
-														</span>
-													</div>
-												</div>
-											</div>
-
-											{/* Circular Actions Row */}
-											<div className="cc-circular-actions-row">
 												<button
-													className={`cc-circular-btn ${dndActive ? "active" : ""}`}
-													onClick={(e) => {
-														e.stopPropagation();
-														setDndActive((prev) => !prev);
-													}}
-													title={`Focus / DND: ${dndActive ? "On" : "Off"}`}
-												>
-													<MoonIcon />
-												</button>
-												<button
-													className={`cc-circular-btn ${batterySaverEnabled ? "active" : ""}`}
-													onClick={(e) => {
-														e.stopPropagation();
-														openBatterySaverSettings();
-													}}
-													title={`Energy Saver: ${batterySaverEnabled ? "On" : "Off"} — Click to open Settings`}
-												>
-													<BatterySaverIcon />
-												</button>
-												<button
-													className="cc-circular-btn"
-													onClick={(e) => {
-														e.stopPropagation();
-														openSystemTray(e);
-													}}
-													title="System Tray"
-												>
-													<TrayIcon />
-												</button>
-												<button
-													className="cc-circular-btn"
-													onClick={(e) => {
-														e.stopPropagation();
-														invoke("open_notification_center");
-													}}
-													title="Notification Center"
-												>
-													<BellIcon />
-												</button>
-												<button
-													className="cc-circular-btn"
+													className="tqc-settings-btn"
 													onClick={(e) => {
 														e.stopPropagation();
 														openSettingsWindow();
 													}}
 													title="Velora Settings"
 												>
-													<SettingsIcon />
-												</button>
-												<button
-													className="cc-circular-btn"
-													onClick={(e) => {
-														e.stopPropagation();
-														invoke("restart_velora");
-													}}
-													title="Restart Velora"
-												>
-													<ReloadIcon />
+													<SettingsIconLucide size={12} />
 												</button>
 											</div>
 
-											{/* Classic Sliders Area */}
-											<div className="cc-classic-sliders-area">
-												{/* Volume Slider */}
-												<div className="cc-classic-slider-row">
-													<div className="cc-classic-slider-label">
-														<VolumeLowIcon style={{ opacity: 0.5 }} />
-														<span>Volume</span>
-													</div>
-													<div className="cc-classic-slider-track">
-														<input
-															type="range"
-															min="0"
-															max="1"
-															step="0.01"
-															value={displayVolume}
-															onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-															onPointerDown={(e) => e.stopPropagation()}
-															onClick={(e) => e.stopPropagation()}
-															className="cc-classic-input"
-														/>
-														<div
-															className="cc-classic-fill"
-															style={{ width: `${displayVolume * 100}%` }}
-														/>
-													</div>
-													<span className="cc-classic-percentage">
-														{Math.round(displayVolume * 100)}%
-													</span>
+											{/* Tabbed Body: Left Tile Grid + Right Media & Sliders Column */}
+											<div className="tqc-body">
+												{/* Left Column: Tab Viewport */}
+												<div
+													className="tqc-left-pane"
+													onWheel={(e) => {
+														if (e.deltaY > 15) {
+															setQuickCenterTab((c) =>
+																c === "connectivity" ? "display" : c === "display" ? "system" : "system"
+															);
+														} else if (e.deltaY < -15) {
+															setQuickCenterTab((c) =>
+																c === "system" ? "display" : c === "display" ? "connectivity" : "connectivity"
+															);
+														}
+													}}
+												>
+													<AnimatePresence mode="wait">
+														{quickCenterTab === "connectivity" && (
+															<motion.div
+																key="tab-connectivity"
+																className="tqc-grid"
+																initial={{ opacity: 0, x: -6 }}
+																animate={{ opacity: 1, x: 0 }}
+																exit={{ opacity: 0, x: 6 }}
+																transition={{ duration: 0.12 }}
+															>
+																{/* Mobile hotspot */}
+																<div
+																	className={`tqc-tile ${mobileHotspot ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		toggleMobileHotspotAction();
+																	}}
+																	onContextMenu={(e) => {
+																		e.preventDefault();
+																		e.stopPropagation();
+																		invoke("open_mobile_hotspot_settings");
+																	}}
+																	title="Left-click to toggle in-place, right-click for settings"
+																>
+																	<div className="tqc-tile-icon">
+																		<Radio size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Mobile hotspot</span>
+																	<span className="tqc-tile-status">
+																		{mobileHotspot ? "On" : "Off"}
+																	</span>
+																</div>
+
+																{/* Bluetooth Split Tile */}
+																<div
+																	className={`tqc-tile tqc-split-tile ${bluetoothEnabled ? "active" : ""}`}
+																	onContextMenu={handleBluetoothRightClick}
+																	title="Bluetooth: Click icon to toggle, click text to open devices"
+																>
+																	<button
+																		type="button"
+																		className="tqc-split-toggle"
+																		onClick={(e) => {
+																			e.stopPropagation();
+																			toggleBluetooth();
+																		}}
+																		title={bluetoothEnabled ? "Turn Bluetooth Off" : "Turn Bluetooth On"}
+																		aria-label={bluetoothEnabled ? "Turn Bluetooth Off" : "Turn Bluetooth On"}
+																	>
+																		<div className="tqc-tile-icon">
+																			<LucideBluetooth size={16} />
+																		</div>
+																	</button>
+																	<button
+																		type="button"
+																		className="tqc-split-details"
+																		onClick={(e) => {
+																			e.stopPropagation();
+																			setVeloraMode("bluetooth");
+																		}}
+																		title="Open Bluetooth devices"
+																		aria-label="Open Bluetooth devices"
+																	>
+																		<div className="tqc-split-label-row">
+																			<span className="tqc-tile-title">Bluetooth</span>
+																			<ChevronRight size={10} className="tqc-split-chevron" />
+																		</div>
+																		<span className="tqc-tile-status">
+																			{!bluetoothEnabled
+																				? "Off"
+																				: btConnectedNames.length > 0
+																					? btConnectedNames[0]
+																					: "On"}
+																		</span>
+																	</button>
+																</div>
+
+																{/* Airplane mode */}
+																<div
+																	className={`tqc-tile ${airplaneMode ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		toggleAirplaneMode();
+																	}}
+																	onContextMenu={(e) => {
+																		e.preventDefault();
+																		e.stopPropagation();
+																		invoke("open_airplane_mode_settings");
+																	}}
+																	title="Left-click to toggle in-place, right-click for settings"
+																>
+																	<div className="tqc-tile-icon">
+																		<Plane size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Airplane mode</span>
+																	<span className="tqc-tile-status">
+																		{airplaneMode ? "On" : "Off"}
+																	</span>
+																</div>
+
+																{/* Wi-Fi Split Tile */}
+																<div
+																	className={`tqc-tile tqc-split-tile ${wifiEnabled ? "active" : ""}`}
+																	onContextMenu={handleWifiRightClick}
+																	title="Wi-Fi: Click icon to toggle, click text to open networks"
+																>
+																	<button
+																		type="button"
+																		className="tqc-split-toggle"
+																		onClick={(e) => {
+																			e.stopPropagation();
+																			toggleWifi();
+																		}}
+																		title={wifiEnabled ? "Turn Wi-Fi Off" : "Turn Wi-Fi On"}
+																		aria-label={wifiEnabled ? "Turn Wi-Fi Off" : "Turn Wi-Fi On"}
+																	>
+																		<div className="tqc-tile-icon">
+																			<LucideWifi size={16} />
+																		</div>
+																	</button>
+																	<button
+																		type="button"
+																		className="tqc-split-details"
+																		onClick={(e) => {
+																			e.stopPropagation();
+																			setVeloraMode("wifi");
+																		}}
+																		title="Open Wi-Fi networks"
+																		aria-label="Open Wi-Fi networks"
+																	>
+																		<div className="tqc-split-label-row">
+																			<span className="tqc-tile-title">Wi-Fi</span>
+																			<ChevronRight size={10} className="tqc-split-chevron" />
+																		</div>
+																		<span className="tqc-tile-status">
+																			{wifiStatus === null
+																				? "…"
+																				: !wifiEnabled
+																					? "Off"
+																					: wifiConnected
+																						? (wifiStatus?.ssid ?? "Connected")
+																						: "Not connected"}
+																		</span>
+																	</button>
+																</div>
+
+																{/* Night light */}
+																<div
+																	className={`tqc-tile ${nightLight ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		toggleNightLightAction();
+																	}}
+																	onContextMenu={(e) => {
+																		e.preventDefault();
+																		e.stopPropagation();
+																		invoke("open_night_light_settings");
+																	}}
+																	title="Left-click to toggle in-place, right-click for settings"
+																>
+																	<div className="tqc-tile-icon">
+																		<Sun size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Night light</span>
+																	<span className="tqc-tile-status">
+																		{nightLight ? "On" : "Off"}
+																	</span>
+																</div>
+
+																{/* Focus assist / DND */}
+																<div
+																	className={`tqc-tile ${dndActive ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		setDndActive((p) => !p);
+																	}}
+																	onContextMenu={(e) => {
+																		e.preventDefault();
+																		e.stopPropagation();
+																		invoke("open_notification_center");
+																	}}
+																	title="Focus assist: Left-click to toggle in-place"
+																>
+																	<div className="tqc-tile-icon">
+																		<Moon size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Focus assist</span>
+																	<span className="tqc-tile-status">
+																		{dndActive ? "On" : "Off"}
+																	</span>
+																</div>
+
+																{/* Nearby sharing */}
+																<div
+																	className={`tqc-tile ${nearbySharing > 0 ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		toggleNearbySharingAction();
+																	}}
+																	onContextMenu={(e) => {
+																		e.preventDefault();
+																		e.stopPropagation();
+																		invoke("open_nearby_sharing_settings");
+																	}}
+																	title="Left-click to cycle Off / My devices / Everyone"
+																>
+																	<div className="tqc-tile-icon">
+																		<Share2 size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Nearby sharing</span>
+																	<span className="tqc-tile-status">
+																		{nearbySharing === 2
+																			? "Everyone"
+																			: nearbySharing === 1
+																				? "My devices"
+																				: "Off"}
+																	</span>
+																</div>
+
+																{/* Cast */}
+																<div
+																	className="tqc-tile"
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		invoke("open_cast_menu");
+																	}}
+																	title="Cast to wireless display (Win + K)"
+																>
+																	<div className="tqc-tile-icon">
+																		<Cast size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Cast</span>
+																	<span className="tqc-tile-status">Off</span>
+																</div>
+															</motion.div>
+														)}
+
+														{quickCenterTab === "display" && (
+															<motion.div
+																key="tab-display"
+																className="tqc-grid"
+																initial={{ opacity: 0, x: -6 }}
+																animate={{ opacity: 1, x: 0 }}
+																exit={{ opacity: 0, x: 6 }}
+																transition={{ duration: 0.12 }}
+															>
+																{/* Brightness */}
+																<div
+																	className={`tqc-tile ${currentBrightness > 40 ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		const next = currentBrightness >= 100 ? 30 : currentBrightness + 35;
+																		handleBrightnessChange(next);
+																	}}
+																	title="Click to cycle brightness (30% -> 65% -> 100%)"
+																>
+																	<div className="tqc-tile-icon">
+																		<Sun size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Brightness</span>
+																	<span className="tqc-tile-status">{currentBrightness}%</span>
+																</div>
+
+																{/* Dark mode */}
+																<div
+																	className={`tqc-tile ${darkMode ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		toggleDarkModeAction();
+																	}}
+																	title="Toggle Windows dark / light mode"
+																>
+																	<div className="tqc-tile-icon">
+																		<Moon size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Dark mode</span>
+																	<span className="tqc-tile-status">{darkMode ? "On" : "Off"}</span>
+																</div>
+
+																{/* HDR */}
+																<div
+																	className={`tqc-tile ${hdrActive ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		setHdrActive((p) => !p);
+																		invoke("open_system_action", { action: "settings" });
+																	}}
+																	title="HDR Display Settings"
+																>
+																	<div className="tqc-tile-icon">
+																		<Sparkles size={16} />
+																	</div>
+																	<span className="tqc-tile-title">HDR</span>
+																	<span className="tqc-tile-status">{hdrActive ? "On" : "Auto"}</span>
+																</div>
+
+																{/* Night light */}
+																<div
+																	className={`tqc-tile ${nightLight ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		toggleNightLightAction();
+																	}}
+																	onContextMenu={(e) => {
+																		e.preventDefault();
+																		e.stopPropagation();
+																		invoke("open_night_light_settings");
+																	}}
+																	title="Left-click to toggle in-place"
+																>
+																	<div className="tqc-tile-icon">
+																		<Sun size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Night light</span>
+																	<span className="tqc-tile-status">{nightLight ? "On" : "Off"}</span>
+																</div>
+
+																{/* Color profile */}
+																<div
+																	className="tqc-tile"
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		invoke("open_system_action", { action: "settings" });
+																	}}
+																	title="Color Profile Settings"
+																>
+																	<div className="tqc-tile-icon">
+																		<Palette size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Color profile</span>
+																	<span className="tqc-tile-status">sRGB</span>
+																</div>
+
+																{/* Rotation lock */}
+																<div
+																	className={`tqc-tile ${rotationLocked ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		setRotationLocked((p) => !p);
+																	}}
+																	title="Toggle Display Rotation Lock"
+																>
+																	<div className="tqc-tile-icon">
+																		<RotateCcw size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Rotation lock</span>
+																	<span className="tqc-tile-status">{rotationLocked ? "On" : "Off"}</span>
+																</div>
+
+																{/* Project */}
+																<div
+																	className="tqc-tile"
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		invoke("open_project_menu");
+																	}}
+																	title="Project display modes (DisplaySwitch.exe / Win + P)"
+																>
+																	<div className="tqc-tile-icon">
+																		<ScreenShare size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Project</span>
+																	<span className="tqc-tile-status">Screens</span>
+																</div>
+
+																{/* Eye care */}
+																<div
+																	className={`tqc-tile ${eyeCareActive || nightLight ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		setEyeCareActive((p) => !p);
+																		toggleNightLightAction();
+																	}}
+																	title="Toggle Eye Care warmth filter"
+																>
+																	<div className="tqc-tile-icon">
+																		<Eye size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Eye care</span>
+																	<span className="tqc-tile-status">
+																		{eyeCareActive || nightLight ? "On" : "Off"}
+																	</span>
+																</div>
+															</motion.div>
+														)}
+
+														{quickCenterTab === "system" && (
+															<motion.div
+																key="tab-system"
+																className="tqc-grid"
+																initial={{ opacity: 0, x: -6 }}
+																animate={{ opacity: 1, x: 0 }}
+																exit={{ opacity: 0, x: 6 }}
+																transition={{ duration: 0.12 }}
+															>
+																{/* Battery saver */}
+																<div
+																	className={`tqc-tile ${batterySaverEnabled ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		toggleBatterySaverAction();
+																	}}
+																	onContextMenu={(e) => {
+																		e.preventDefault();
+																		e.stopPropagation();
+																		openBatterySaverSettings();
+																	}}
+																	title="Left-click to toggle in-place"
+																>
+																	<div className="tqc-tile-icon">
+																		<BatterySaverIcon />
+																	</div>
+																	<span className="tqc-tile-title">Battery saver</span>
+																	<span className="tqc-tile-status">
+																		{batterySaverEnabled ? "On" : "Off"}
+																	</span>
+																</div>
+
+																{/* Accessibility */}
+																<div
+																	className={`tqc-tile ${accessibilityActive ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		toggleAccessibilityAction();
+																	}}
+																	onContextMenu={(e) => {
+																		e.preventDefault();
+																		e.stopPropagation();
+																		invoke("open_accessibility_menu");
+																	}}
+																	title="Left-click to toggle magnifier in-place"
+																>
+																	<div className="tqc-tile-icon">
+																		<Accessibility size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Accessibility</span>
+																	<span className="tqc-tile-status">
+																		{accessibilityActive ? "On" : "Off"}
+																	</span>
+																</div>
+
+																{/* Storage */}
+																<div
+																	className="tqc-tile"
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		invoke("open_system_action", { action: "settings" });
+																	}}
+																	title="Storage & Disk Management"
+																>
+																	<div className="tqc-tile-icon">
+																		<HardDrive size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Storage</span>
+																	<span className="tqc-tile-status">
+																		{diskSpace > 0 ? `${diskSpace}% used` : "SSD"}
+																	</span>
+																</div>
+
+																{/* Location */}
+																<div
+																	className={`tqc-tile ${locationActive ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		setLocationActive((p) => !p);
+																	}}
+																	title="Toggle Windows Location permission"
+																>
+																	<div className="tqc-tile-icon">
+																		<MapPin size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Location</span>
+																	<span className="tqc-tile-status">
+																		{locationActive ? "On" : "Off"}
+																	</span>
+																</div>
+
+																{/* Do not disturb */}
+																<div
+																	className={`tqc-tile ${dndActive ? "active" : ""}`}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		setDndActive((p) => !p);
+																	}}
+																	title="Toggle Do Not Disturb"
+																>
+																	<div className="tqc-tile-icon">
+																		<BellOff size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Do not disturb</span>
+																	<span className="tqc-tile-status">{dndActive ? "On" : "Off"}</span>
+																</div>
+
+																{/* Keyboard */}
+																<div
+																	className="tqc-tile"
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		invoke("toggle_touch_keyboard");
+																	}}
+																	title="Toggle On-Screen Keyboard"
+																>
+																	<div className="tqc-tile-icon">
+																		<Keyboard size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Keyboard</span>
+																	<span className="tqc-tile-status">OSK</span>
+																</div>
+
+																{/* Screen snip */}
+																<div
+																	className="tqc-tile"
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		invoke("trigger_screen_snip");
+																	}}
+																	title="Take Screen Snip (Snipping tool)"
+																>
+																	<div className="tqc-tile-icon">
+																		<Crop size={16} />
+																	</div>
+																	<span className="tqc-tile-title">Screen snip</span>
+																	<span className="tqc-tile-status">Tool</span>
+																</div>
+
+																{/* Dock Mode */}
+																<div
+																	className={`tqc-tile ${dockMode === "fixed" ? "active" : ""}`}
+																	onClick={toggleDockModeSetting}
+																	title="Cycle dock mode: Fixed / Smart / Peek"
+																>
+																	<div className="tqc-tile-icon">
+																		<DockIcon />
+																	</div>
+																	<span className="tqc-tile-title">Dock Mode</span>
+																	<span className="tqc-tile-status">
+																		{dockMode === "fixed"
+																			? "Fixed"
+																			: dockMode === "smart"
+																				? "Smart"
+																				: "Peek"}
+																	</span>
+																</div>
+															</motion.div>
+														)}
+													</AnimatePresence>
 												</div>
 
-												{/* Brightness Slider */}
-												<div className="cc-classic-slider-row">
-													<div className="cc-classic-slider-label">
-														<BrightnessLowIcon />
-														<span>Brightness</span>
+												{/* Right Column: Media Card + Sliders + Battery Footer */}
+												<div className="tqc-right-pane">
+													{/* Media Card */}
+													<div className="tqc-media-card">
+														<div className="tqc-media-top">
+															<div className="tqc-media-art">
+																{albumArtUrl ? (
+																	<img src={albumArtUrl} alt="Album Art" />
+																) : (
+																	<Music size={15} style={{ opacity: 0.6 }} />
+																)}
+															</div>
+															<div className="tqc-media-info">
+																<span className="tqc-media-title">
+																	{mediaInfo.title ? mediaInfo.title : "After Dark"}
+																</span>
+																<span className="tqc-media-artist">
+																	{mediaInfo.artist ? mediaInfo.artist : "Mr.Kitty"}
+																</span>
+															</div>
+															<div className="tqc-media-badge">
+																<LucideBluetooth size={12} />
+															</div>
+														</div>
+														<div className="tqc-media-controls">
+															<button
+																className="tqc-media-btn"
+																onClick={(e) => {
+																	e.stopPropagation();
+																	void skipPrevious();
+																}}
+																title="Previous track"
+															>
+																<SkipBackIcon />
+															</button>
+															<button
+																className="tqc-media-btn tqc-media-play-btn"
+																onClick={(e) => {
+																	e.stopPropagation();
+																	void togglePlayPause();
+																}}
+																title={isPlaying ? "Pause" : "Play"}
+															>
+																{isPlaying ? <PauseIcon /> : <PlayIcon />}
+															</button>
+															<button
+																className="tqc-media-btn"
+																onClick={(e) => {
+																	e.stopPropagation();
+																	void skipNext();
+																}}
+																title="Next track"
+															>
+																<SkipForwardIcon />
+															</button>
+														</div>
 													</div>
-													<div className="cc-classic-slider-track">
-														<input
-															type="range"
-															min="0"
-															max="100"
-															step="1"
-															value={currentBrightness}
-															onChange={(e) => handleBrightnessChange(parseInt(e.target.value))}
-															onPointerDown={(e) => e.stopPropagation()}
-															onClick={(e) => e.stopPropagation()}
-															className="cc-classic-input"
-														/>
-														<div
-															className="cc-classic-fill"
-															style={{ width: `${currentBrightness}%` }}
-														/>
+
+													{/* Sliders Area */}
+													<div className="tqc-sliders-group">
+														{/* Brightness Slider */}
+														<div className="tqc-slider-row">
+															<Sun size={13} className="tqc-slider-icon" />
+															<div className="tqc-slider-track">
+																<input
+																	type="range"
+																	min="0"
+																	max="100"
+																	step="1"
+																	value={currentBrightness}
+																	onChange={(e) => handleBrightnessChange(parseInt(e.target.value))}
+																	onPointerDown={(e) => e.stopPropagation()}
+																	onClick={(e) => e.stopPropagation()}
+																	className="tqc-slider-input"
+																/>
+																<div
+																	className="tqc-slider-fill"
+																	style={{ width: `${currentBrightness}%` }}
+																/>
+															</div>
+															<span className="tqc-slider-percent">{currentBrightness}%</span>
+														</div>
+
+														{/* Volume Slider */}
+														<div className="tqc-slider-row">
+															<VolumeLowIcon style={{ width: 13, height: 13, opacity: 0.7 }} />
+															<div className="tqc-slider-track">
+																<input
+																	type="range"
+																	min="0"
+																	max="1"
+																	step="0.01"
+																	value={displayVolume}
+																	onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+																	onPointerDown={(e) => e.stopPropagation()}
+																	onClick={(e) => e.stopPropagation()}
+																	className="tqc-slider-input"
+																/>
+																<div
+																	className="tqc-slider-fill"
+																	style={{ width: `${displayVolume * 100}%` }}
+																/>
+															</div>
+															<span className="tqc-slider-percent">{Math.round(displayVolume * 100)}%</span>
+														</div>
 													</div>
-													<span className="cc-classic-percentage">{currentBrightness}%</span>
+
+													{/* Footer Bar */}
+													<div className="tqc-footer">
+														<div className="tqc-footer-battery">
+															<BatteryCharging size={13} />
+															<span>
+																{batteryDetails?.percent ?? batteryLevel}% •{" "}
+																{batteryDetails?.charging ?? isCharging ? "Charging" : "On battery"}
+															</span>
+														</div>
+														<div className="tqc-footer-actions">
+															<button
+																className="tqc-footer-btn"
+																onClick={openSystemTray}
+																title="System Tray"
+															>
+																<TrayIcon />
+															</button>
+															<button
+																className="tqc-footer-btn"
+																onClick={(e) => {
+																	e.stopPropagation();
+																	openSettingsWindow();
+																}}
+																title="Edit / Customize"
+															>
+																<Pencil size={11} />
+															</button>
+															<button
+																className="tqc-footer-btn"
+																onClick={(e) => {
+																	e.stopPropagation();
+																	invoke("restart_velora");
+																}}
+																title="Power / Restart Velora"
+															>
+																<Power size={11} />
+															</button>
+														</div>
+													</div>
 												</div>
 											</div>
 										</motion.div>
@@ -4159,77 +4799,6 @@ function Calendar() {
 	);
 }
 
-function BluetoothIcon() {
-	return (
-		<svg
-			width="18"
-			height="18"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2.5"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-		>
-			<path d="M6.5 6.5l11 11L12 23V1l5.5 5.5-11 11" />
-		</svg>
-	);
-}
-
-function SettingsIcon() {
-	return (
-		<svg
-			width="14"
-			height="14"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2.5"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			style={{ opacity: 0.9 }}
-		>
-			<circle cx="12" cy="12" r="3" />
-			<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-		</svg>
-	);
-}
-
-function BrightnessLowIcon() {
-	return (
-		<svg
-			width="12"
-			height="12"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			style={{ opacity: 0.5 }}
-		>
-			<circle cx="12" cy="12" r="5" fill="currentColor" />
-		</svg>
-	);
-}
-
-function MoonIcon() {
-	return (
-		<svg
-			width="18"
-			height="18"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2.5"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-		>
-			<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-		</svg>
-	);
-}
-
 function DockIcon() {
 	return (
 		<svg
@@ -4247,59 +4816,6 @@ function DockIcon() {
 			<line x1="10" y1="18" x2="10.01" y2="18" strokeWidth="3.5" strokeLinecap="round" />
 			<line x1="14" y1="18" x2="14.01" y2="18" strokeWidth="3.5" strokeLinecap="round" />
 			<line x1="18" y1="18" x2="18.01" y2="18" strokeWidth="3.5" strokeLinecap="round" />
-		</svg>
-	);
-}
-
-function NotchIcon() {
-	return (
-		<svg
-			width="18"
-			height="18"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2.5"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-		>
-			<path d="M4 3h16a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
-			<path d="M9 9v4a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2V9" />
-		</svg>
-	);
-}
-
-function BellIcon() {
-	return (
-		<svg
-			width="14"
-			height="14"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2.5"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-		>
-			<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9z" />
-			<path d="M13.73 21a2 2 0 0 1-3.46 0" />
-		</svg>
-	);
-}
-
-function ReloadIcon() {
-	return (
-		<svg
-			width="14"
-			height="14"
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeWidth="2.5"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-		>
-			<path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
 		</svg>
 	);
 }

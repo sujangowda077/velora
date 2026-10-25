@@ -3434,8 +3434,14 @@ pub fn set_brightness(app: AppHandle, brightness: u32) {
     }
 }
 
+static BATTERY_SAVER_OVERRIDE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[tauri::command]
 pub async fn get_battery_saver_state() -> Result<bool, String> {
+    if BATTERY_SAVER_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        return Ok(true);
+    }
     // Uses Windows Runtime PowerManager — no PowerShell required.
     tauri::async_runtime::spawn_blocking(|| {
         unsafe {
@@ -3455,6 +3461,14 @@ pub async fn get_battery_saver_state() -> Result<bool, String> {
 }
 
 #[tauri::command]
+pub fn toggle_battery_saver() -> Result<bool, String> {
+    let current = BATTERY_SAVER_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    let target = !current;
+    BATTERY_SAVER_OVERRIDE.store(target, std::sync::atomic::Ordering::Relaxed);
+    Ok(target)
+}
+
+#[tauri::command]
 pub fn open_battery_saver_settings() {
     unsafe {
         use windows::Win32::UI::Shell::ShellExecuteA;
@@ -3467,6 +3481,673 @@ pub fn open_battery_saver_settings() {
             windows::core::PCSTR::null(),
             SW_SHOWNORMAL,
         );
+    }
+}
+
+// ── Native Windows Quick Settings Handlers ────────────────────────────────────
+
+static AIRPLANE_MODE_OVERRIDE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static NIGHT_LIGHT_OVERRIDE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[tauri::command]
+pub fn get_airplane_mode_state() -> Result<bool, String> {
+    if AIRPLANE_MODE_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        return Ok(true);
+    }
+    unsafe {
+        use windows::Win32::System::Registry::{
+            RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ, REG_DWORD,
+        };
+        let subkey = windows::core::w!("System\\CurrentControlSet\\Control\\RadioManagement\\SystemRadioState");
+        let mut hkey = windows::Win32::System::Registry::HKEY::default();
+        if RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey, Some(0), KEY_READ, &mut hkey).is_ok() {
+            let mut val: u32 = 0;
+            let mut val_type = REG_DWORD;
+            let mut val_size = std::mem::size_of::<u32>() as u32;
+            let status = RegQueryValueExW(
+                hkey,
+                windows::core::PCWSTR::null(),
+                None,
+                Some(&mut val_type),
+                Some(&mut val as *mut u32 as *mut u8),
+                Some(&mut val_size),
+            );
+            let _ = RegCloseKey(hkey);
+            if status.is_ok() {
+                return Ok(val == 1);
+            }
+        }
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+pub async fn toggle_airplane_mode() -> Result<bool, String> {
+    let current = get_airplane_mode_state().unwrap_or_else(|_| {
+        AIRPLANE_MODE_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed)
+    });
+    let target = !current;
+    AIRPLANE_MODE_OVERRIDE.store(target, std::sync::atomic::Ordering::Relaxed);
+    if target {
+        let _ = set_wifi_state(false).await;
+        let _ = set_bluetooth_state(false).await;
+    } else {
+        let _ = set_wifi_state(true).await;
+    }
+    Ok(target)
+}
+
+#[tauri::command]
+pub fn get_night_light_state() -> Result<bool, String> {
+    if NIGHT_LIGHT_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        return Ok(true);
+    }
+    unsafe {
+        use windows::Win32::System::Registry::{
+            RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER, KEY_READ, REG_BINARY,
+        };
+        let subkey = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current\\default$windows.data.bluelightreduction.bluelightreductionstate\\windows.data.bluelightreduction.bluelightreductionstate");
+        let mut hkey = windows::Win32::System::Registry::HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, subkey, Some(0), KEY_READ, &mut hkey).is_ok() {
+            let mut data = [0u8; 64];
+            let mut val_type = REG_BINARY;
+            let mut val_size = 64u32;
+            let val_name = windows::core::w!("Data");
+            let status = RegQueryValueExW(
+                hkey,
+                val_name,
+                None,
+                Some(&mut val_type),
+                Some(data.as_mut_ptr()),
+                Some(&mut val_size),
+            );
+            let _ = RegCloseKey(hkey);
+            if status.is_ok() && val_size >= 19 {
+                return Ok(data[18] == 0x15);
+            }
+        }
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+pub fn toggle_night_light() -> Result<bool, String> {
+    unsafe {
+        #[link(name = "gdi32")]
+        extern "system" {
+            fn SetDeviceGammaRamp(
+                hdc: windows::Win32::Graphics::Gdi::HDC,
+                lp_ramp: *const std::ffi::c_void,
+            ) -> i32;
+        }
+
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
+
+        let current = get_night_light_state().unwrap_or_else(|_| {
+            NIGHT_LIGHT_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed)
+        });
+        let target = !current;
+        NIGHT_LIGHT_OVERRIDE.store(target, std::sync::atomic::Ordering::Relaxed);
+
+        // Build gamma ramp: 3 arrays of 256 u16 values [red, green, blue]
+        let mut ramp = [0u16; 768];
+        for i in 0..256 {
+            let base = (i as u32 * 65535 / 255) as u16;
+            if target {
+                // Warm color temperature: full red, reduced green, lower blue
+                ramp[i] = base;
+                ramp[256 + i] = ((base as f32 * 0.82) as u32).min(65535) as u16;
+                ramp[512 + i] = ((base as f32 * 0.55) as u32).min(65535) as u16;
+            } else {
+                // Linear normal ramp
+                ramp[i] = base;
+                ramp[256 + i] = base;
+                ramp[512 + i] = base;
+            }
+        }
+
+        let hdc = GetDC(Some(HWND::default()));
+        if !hdc.is_invalid() {
+            let _ = SetDeviceGammaRamp(hdc, ramp.as_ptr() as *const _);
+            let _ = ReleaseDC(Some(HWND::default()), hdc);
+        }
+
+        // Also update CloudStore registry byte 18 if possible
+        use windows::Win32::System::Registry::{
+            RegCloseKey, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY_CURRENT_USER,
+            KEY_READ, KEY_WRITE, REG_BINARY,
+        };
+        let subkey = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current\\default$windows.data.bluelightreduction.bluelightreductionstate\\windows.data.bluelightreduction.bluelightreductionstate");
+        let mut hkey = windows::Win32::System::Registry::HKEY::default();
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            subkey,
+            Some(0),
+            KEY_READ | KEY_WRITE,
+            &mut hkey,
+        )
+        .is_ok()
+        {
+            let mut data = [0u8; 64];
+            let mut val_type = REG_BINARY;
+            let mut val_size = 64u32;
+            let val_name = windows::core::w!("Data");
+            if RegQueryValueExW(
+                hkey,
+                val_name,
+                None,
+                Some(&mut val_type),
+                Some(data.as_mut_ptr()),
+                Some(&mut val_size),
+            )
+            .is_ok()
+                && val_size >= 19
+            {
+                data[18] = if target { 0x15 } else { 0x13 };
+                let _ = RegSetValueExW(
+                    hkey,
+                    val_name,
+                    Some(0),
+                    REG_BINARY,
+                    Some(&data[..val_size as usize]),
+                );
+            }
+            let _ = RegCloseKey(hkey);
+        }
+
+        Ok(target)
+    }
+}
+
+#[tauri::command]
+pub fn open_night_light_settings() {
+    unsafe {
+        use windows::Win32::UI::Shell::ShellExecuteA;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let _ = ShellExecuteA(
+            None,
+            windows::core::PCSTR(c"open".as_ptr() as *const u8),
+            windows::core::PCSTR(c"ms-settings:nightlight".as_ptr() as *const u8),
+            windows::core::PCSTR::null(),
+            windows::core::PCSTR::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+#[tauri::command]
+pub fn open_project_menu() {
+    unsafe {
+        use windows::Win32::UI::Shell::ShellExecuteA;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let _ = ShellExecuteA(
+            None,
+            windows::core::PCSTR(c"open".as_ptr() as *const u8),
+            windows::core::PCSTR(c"DisplaySwitch.exe".as_ptr() as *const u8),
+            windows::core::PCSTR::null(),
+            windows::core::PCSTR::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+#[tauri::command]
+pub fn open_cast_menu() {
+    unsafe {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_LWIN,
+        };
+        let k_key = VIRTUAL_KEY(0x4B); // 'K' key for Win+K
+        let inputs = [
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_LWIN,
+                        wScan: 0,
+                        dwFlags: Default::default(),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: k_key,
+                        wScan: 0,
+                        dwFlags: Default::default(),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: k_key,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_LWIN,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+#[tauri::command]
+pub fn toggle_live_captions() {
+    unsafe {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_CONTROL,
+            VK_LWIN,
+        };
+        let l_key = VIRTUAL_KEY(0x4C); // 'L' key for Win+Ctrl+L
+        let inputs = [
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_LWIN,
+                        wScan: 0,
+                        dwFlags: Default::default(),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_CONTROL,
+                        wScan: 0,
+                        dwFlags: Default::default(),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: l_key,
+                        wScan: 0,
+                        dwFlags: Default::default(),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: l_key,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_CONTROL,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_LWIN,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+static ACCESSIBILITY_OVERRIDE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[tauri::command]
+pub fn toggle_accessibility() -> Result<bool, String> {
+    let current = ACCESSIBILITY_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    let target = !current;
+    ACCESSIBILITY_OVERRIDE.store(target, std::sync::atomic::Ordering::Relaxed);
+    unsafe {
+        use windows::Win32::UI::Shell::ShellExecuteA;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        if target {
+            let _ = ShellExecuteA(
+                None,
+                windows::core::PCSTR(c"open".as_ptr() as *const u8),
+                windows::core::PCSTR(c"magnify.exe".as_ptr() as *const u8),
+                windows::core::PCSTR::null(),
+                windows::core::PCSTR::null(),
+                SW_SHOWNORMAL,
+            );
+        } else {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/IM", "magnify.exe"])
+                .output();
+        }
+    }
+    Ok(target)
+}
+
+#[tauri::command]
+pub fn open_accessibility_menu() {
+    unsafe {
+        use windows::Win32::UI::Shell::ShellExecuteA;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let _ = ShellExecuteA(
+            None,
+            windows::core::PCSTR(c"open".as_ptr() as *const u8),
+            windows::core::PCSTR(c"ms-settings:easeofaccess-display".as_ptr() as *const u8),
+            windows::core::PCSTR::null(),
+            windows::core::PCSTR::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+static MOBILE_HOTSPOT_OVERRIDE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[tauri::command]
+pub async fn get_mobile_hotspot_state() -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        unsafe {
+            let _ = windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_MULTITHREADED,
+            );
+        }
+        use windows::Networking::Connectivity::NetworkInformation;
+        use windows::Networking::NetworkOperators::{
+            NetworkOperatorTetheringManager, TetheringOperationalState,
+        };
+
+        if let Ok(profile) = NetworkInformation::GetInternetConnectionProfile() {
+            if let Ok(manager) =
+                NetworkOperatorTetheringManager::CreateFromConnectionProfile(&profile)
+            {
+                if let Ok(state) = manager.TetheringOperationalState() {
+                    return Ok(state == TetheringOperationalState::On);
+                }
+            }
+        }
+        Ok(MOBILE_HOTSPOT_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn toggle_mobile_hotspot() -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        unsafe {
+            let _ = windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_MULTITHREADED,
+            );
+        }
+        use windows::Networking::Connectivity::NetworkInformation;
+        use windows::Networking::NetworkOperators::{
+            NetworkOperatorTetheringManager, TetheringOperationalState,
+        };
+
+        if let Ok(profile) = NetworkInformation::GetInternetConnectionProfile() {
+            if let Ok(manager) =
+                NetworkOperatorTetheringManager::CreateFromConnectionProfile(&profile)
+            {
+                let is_on = manager
+                    .TetheringOperationalState()
+                    .map(|s| s == TetheringOperationalState::On)
+                    .unwrap_or(false);
+
+                if is_on {
+                    if let Ok(op) = manager.StopTetheringAsync() {
+                        let _ = op.get();
+                    }
+                    MOBILE_HOTSPOT_OVERRIDE.store(false, std::sync::atomic::Ordering::Relaxed);
+                    return Ok(false);
+                } else {
+                    if let Ok(op) = manager.StartTetheringAsync() {
+                        let _ = op.get();
+                    }
+                    MOBILE_HOTSPOT_OVERRIDE.store(true, std::sync::atomic::Ordering::Relaxed);
+                    return Ok(true);
+                }
+            }
+        }
+
+        let curr = MOBILE_HOTSPOT_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+        let next = !curr;
+        MOBILE_HOTSPOT_OVERRIDE.store(next, std::sync::atomic::Ordering::Relaxed);
+        Ok(next)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn open_mobile_hotspot_settings() {
+    unsafe {
+        use windows::Win32::UI::Shell::ShellExecuteA;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let _ = ShellExecuteA(
+            None,
+            windows::core::PCSTR(c"open".as_ptr() as *const u8),
+            windows::core::PCSTR(c"ms-settings:network-mobilehotspot".as_ptr() as *const u8),
+            windows::core::PCSTR::null(),
+            windows::core::PCSTR::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+#[tauri::command]
+pub fn get_nearby_sharing_state() -> Result<u32, String> {
+    unsafe {
+        use windows::Win32::System::Registry::{
+            RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER, KEY_READ, REG_DWORD,
+        };
+        let subkey = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\CDP");
+        let mut hkey = windows::Win32::System::Registry::HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, subkey, Some(0), KEY_READ, &mut hkey).is_ok() {
+            let mut val: u32 = 0;
+            let mut val_type = REG_DWORD;
+            let mut val_size = std::mem::size_of::<u32>() as u32;
+            let val_name = windows::core::w!("NearShareChannelUserAuthzPolicy");
+            let status = RegQueryValueExW(
+                hkey,
+                val_name,
+                None,
+                Some(&mut val_type),
+                Some(&mut val as *mut u32 as *mut u8),
+                Some(&mut val_size),
+            );
+            let _ = RegCloseKey(hkey);
+            if status.is_ok() {
+                return Ok(val);
+            }
+        }
+        Ok(0)
+    }
+}
+
+#[tauri::command]
+pub fn toggle_nearby_sharing() -> Result<u32, String> {
+    unsafe {
+        use windows::Win32::System::Registry::{
+            RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY_CURRENT_USER,
+            KEY_READ, KEY_WRITE, REG_DWORD,
+        };
+        let subkey = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\CDP");
+        let mut hkey = windows::Win32::System::Registry::HKEY::default();
+        let current = get_nearby_sharing_state().unwrap_or(0);
+        let next: u32 = if current == 0 { 1 } else if current == 1 { 2 } else { 0 };
+
+        if RegOpenKeyExW(HKEY_CURRENT_USER, subkey, Some(0), KEY_READ | KEY_WRITE, &mut hkey).is_ok() {
+            let val_name = windows::core::w!("NearShareChannelUserAuthzPolicy");
+            let bytes = next.to_le_bytes();
+            let _ = RegSetValueExW(
+                hkey,
+                val_name,
+                Some(0),
+                REG_DWORD,
+                Some(&bytes),
+            );
+            let _ = RegCloseKey(hkey);
+        }
+        Ok(next)
+    }
+}
+
+#[tauri::command]
+pub fn open_nearby_sharing_settings() {
+    unsafe {
+        use windows::Win32::UI::Shell::ShellExecuteA;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let _ = ShellExecuteA(
+            None,
+            windows::core::PCSTR(c"open".as_ptr() as *const u8),
+            windows::core::PCSTR(c"ms-settings:crossdevice".as_ptr() as *const u8),
+            windows::core::PCSTR::null(),
+            windows::core::PCSTR::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+#[tauri::command]
+pub fn trigger_screen_snip() {
+    unsafe {
+        use windows::Win32::UI::Shell::ShellExecuteA;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let _ = ShellExecuteA(
+            None,
+            windows::core::PCSTR(c"open".as_ptr() as *const u8),
+            windows::core::PCSTR(c"ms-screenclip:".as_ptr() as *const u8),
+            windows::core::PCSTR::null(),
+            windows::core::PCSTR::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+#[tauri::command]
+pub fn toggle_touch_keyboard() {
+    unsafe {
+        use windows::Win32::UI::Shell::ShellExecuteA;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let _ = ShellExecuteA(
+            None,
+            windows::core::PCSTR(c"open".as_ptr() as *const u8),
+            windows::core::PCSTR(c"osk.exe".as_ptr() as *const u8),
+            windows::core::PCSTR::null(),
+            windows::core::PCSTR::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+#[tauri::command]
+pub fn get_dark_mode_state() -> Result<bool, String> {
+    unsafe {
+        use windows::Win32::System::Registry::{
+            RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER, KEY_READ, REG_DWORD,
+        };
+        let subkey =
+            windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
+        let mut hkey = windows::Win32::System::Registry::HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, subkey, Some(0), KEY_READ, &mut hkey).is_ok() {
+            let mut val: u32 = 0;
+            let mut val_type = REG_DWORD;
+            let mut val_size = std::mem::size_of::<u32>() as u32;
+            let val_name = windows::core::w!("AppsUseLightTheme");
+            let status = RegQueryValueExW(
+                hkey,
+                val_name,
+                None,
+                Some(&mut val_type),
+                Some(&mut val as *mut u32 as *mut u8),
+                Some(&mut val_size),
+            );
+            let _ = RegCloseKey(hkey);
+            if status.is_ok() {
+                return Ok(val == 0);
+            }
+        }
+        Ok(true)
+    }
+}
+
+#[tauri::command]
+pub fn toggle_dark_mode() -> Result<bool, String> {
+    unsafe {
+        use windows::Win32::System::Registry::{
+            RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE,
+            REG_DWORD,
+        };
+        let is_dark = get_dark_mode_state().unwrap_or(true);
+        let new_light_val: u32 = if is_dark { 1 } else { 0 };
+        let bytes = new_light_val.to_le_bytes();
+        let subkey =
+            windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
+        let mut hkey = windows::Win32::System::Registry::HKEY::default();
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            subkey,
+            Some(0),
+            KEY_READ | KEY_WRITE,
+            &mut hkey,
+        )
+        .is_ok()
+        {
+            let apps_key = windows::core::w!("AppsUseLightTheme");
+            let system_key = windows::core::w!("SystemUsesLightTheme");
+            let _ = RegSetValueExW(hkey, apps_key, Some(0), REG_DWORD, Some(&bytes));
+            let _ = RegSetValueExW(hkey, system_key, Some(0), REG_DWORD, Some(&bytes));
+            let _ = RegCloseKey(hkey);
+        }
+        Ok(new_light_val == 0)
     }
 }
 
