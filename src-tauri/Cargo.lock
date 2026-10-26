@@ -5869,7 +5869,7 @@ dependencies = [
 
 [[package]]
 name = "velora"
-version = "3.13.0"
+version = "3.14.0"
 dependencies = [
  "base64 0.22.1",
  "image",
