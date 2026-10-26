@@ -618,7 +618,6 @@ function App() {
 	const [quickCenterTab, setQuickCenterTab] = useState<"connectivity" | "display" | "system">("connectivity");
 	const [darkMode, setDarkMode] = useState(true);
 	const [locationActive, setLocationActive] = useState(true);
-	const [eyeCareActive, setEyeCareActive] = useState(false);
 	const [hdrActive, setHdrActive] = useState(false);
 	const [rotationLocked, setRotationLocked] = useState(false);
 	const [currentBrightness, setCurrentBrightness] = useState(50);
@@ -2211,6 +2210,9 @@ function App() {
 		invoke<boolean>("get_mobile_hotspot_state")
 			.then(setMobileHotspot)
 			.catch(() => {});
+		invoke<boolean>("get_dnd_state")
+			.then(setDndActive)
+			.catch(() => {});
 		invoke<boolean>("get_dark_mode_state")
 			.then(setDarkMode)
 			.catch(() => {});
@@ -2238,6 +2240,9 @@ function App() {
 			invoke<boolean>("get_mobile_hotspot_state")
 				.then(setMobileHotspot)
 				.catch(() => {});
+			invoke<boolean>("get_dnd_state")
+				.then(setDndActive)
+				.catch(() => {});
 			invoke<boolean>("get_dark_mode_state")
 				.then(setDarkMode)
 				.catch(() => {});
@@ -2256,6 +2261,7 @@ function App() {
 		invoke<boolean>("get_battery_saver_state").then(setBatterySaverEnabled).catch(() => {});
 		invoke<boolean>("get_bluetooth_state").then(setBluetoothEnabled).catch(() => {});
 		invoke<boolean>("get_mobile_hotspot_state").then(setMobileHotspot).catch(() => {});
+		invoke<boolean>("get_dnd_state").then(setDndActive).catch(() => {});
 
 		const interval = setInterval(() => {
 			void refreshWifiStatus();
@@ -2264,6 +2270,7 @@ function App() {
 			invoke<number>("get_nearby_sharing_state").then(setNearbySharing).catch(() => {});
 			invoke<boolean>("get_battery_saver_state").then(setBatterySaverEnabled).catch(() => {});
 			invoke<boolean>("get_mobile_hotspot_state").then(setMobileHotspot).catch(() => {});
+			invoke<boolean>("get_dnd_state").then(setDndActive).catch(() => {});
 		}, 3000);
 		return () => clearInterval(interval);
 	}, [veloraMode, refreshWifiStatus]);
@@ -2482,6 +2489,17 @@ function App() {
 			setNightLight(target);
 		} catch (e) {
 			console.error("Failed to toggle night light:", e);
+		}
+	}, []);
+
+	// Focus assist / Do not disturb toggle
+	const toggleDndAction = useCallback(async () => {
+		try {
+			setDndActive((prev) => !prev);
+			const target = await invoke<boolean>("toggle_dnd");
+			setDndActive(target);
+		} catch (e) {
+			console.error("Failed to toggle DND:", e);
 		}
 	}, []);
 
@@ -3876,14 +3894,14 @@ function App() {
 																	className={`tqc-tile ${dndActive ? "active" : ""}`}
 																	onClick={(e) => {
 																		e.stopPropagation();
-																		setDndActive((p) => !p);
+																		toggleDndAction();
 																	}}
 																	onContextMenu={(e) => {
 																		e.preventDefault();
 																		e.stopPropagation();
-																		invoke("open_notification_center");
+																		invoke("open_focus_assist_settings");
 																	}}
-																	title="Focus assist: Left-click to toggle in-place"
+																	title="Focus assist: Left-click to toggle in-place, right-click for settings"
 																>
 																	<div className="tqc-tile-icon">
 																		<Moon size={16} />
@@ -4067,22 +4085,26 @@ function App() {
 																	<span className="tqc-tile-status">Screens</span>
 																</div>
 
-																{/* Eye care */}
+																{/* Eye care / Night light warmth */}
 																<div
-																	className={`tqc-tile ${eyeCareActive || nightLight ? "active" : ""}`}
+																	className={`tqc-tile ${nightLight ? "active" : ""}`}
 																	onClick={(e) => {
 																		e.stopPropagation();
-																		setEyeCareActive((p) => !p);
 																		toggleNightLightAction();
 																	}}
-																	title="Toggle Eye Care warmth filter"
+																	onContextMenu={(e) => {
+																		e.preventDefault();
+																		e.stopPropagation();
+																		invoke("open_night_light_settings");
+																	}}
+																	title="Eye care: Toggle Night Light warmth filter"
 																>
 																	<div className="tqc-tile-icon">
 																		<Eye size={16} />
 																	</div>
 																	<span className="tqc-tile-title">Eye care</span>
 																	<span className="tqc-tile-status">
-																		{eyeCareActive || nightLight ? "On" : "Off"}
+																		{nightLight ? "On" : "Off"}
 																	</span>
 																</div>
 															</motion.div>
@@ -4184,9 +4206,14 @@ function App() {
 																	className={`tqc-tile ${dndActive ? "active" : ""}`}
 																	onClick={(e) => {
 																		e.stopPropagation();
-																		setDndActive((p) => !p);
+																		toggleDndAction();
 																	}}
-																	title="Toggle Do Not Disturb"
+																	onContextMenu={(e) => {
+																		e.preventDefault();
+																		e.stopPropagation();
+																		invoke("open_focus_assist_settings");
+																	}}
+																	title="Toggle Do Not Disturb: Left-click to toggle, right-click for settings"
 																>
 																	<div className="tqc-tile-icon">
 																		<BellOff size={16} />

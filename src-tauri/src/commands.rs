@@ -3434,37 +3434,276 @@ pub fn set_brightness(app: AppHandle, brightness: u32) {
     }
 }
 
-static BATTERY_SAVER_OVERRIDE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+const WNF_PO_ENERGY_SAVER_OVERRIDE: u64 = 0x41C6013DA3BC3075;
+
+unsafe fn query_wnf_energy_override() -> Option<u32> {
+    #[link(name = "ntdll")]
+    extern "system" {
+        fn NtQueryWnfStateData(
+            state_name: *const u64,
+            type_id: *const std::ffi::c_void,
+            explicit_scope: *const std::ffi::c_void,
+            change_stamp: *mut u32,
+            buffer: *mut u8,
+            buffer_size: *mut u32,
+        ) -> i32;
+    }
+    let mut val: u32 = 0;
+    let mut size: u32 = std::mem::size_of::<u32>() as u32;
+    let mut stamp: u32 = 0;
+    let status = NtQueryWnfStateData(
+        &WNF_PO_ENERGY_SAVER_OVERRIDE,
+        std::ptr::null(),
+        std::ptr::null(),
+        &mut stamp,
+        &mut val as *mut u32 as *mut u8,
+        &mut size,
+    );
+    if status == 0 && size >= 4 {
+        Some(val)
+    } else {
+        None
+    }
+}
+
+unsafe fn set_wnf_energy_override(val: u32) -> bool {
+    #[link(name = "ntdll")]
+    extern "system" {
+        fn NtUpdateWnfStateData(
+            state_name: *const u64,
+            buffer: *const u8,
+            length: u32,
+            type_id: *const std::ffi::c_void,
+            explicit_scope: *const std::ffi::c_void,
+            matching_change_stamp: u32,
+            check_stamp: i32,
+        ) -> i32;
+    }
+    let status = NtUpdateWnfStateData(
+        &WNF_PO_ENERGY_SAVER_OVERRIDE,
+        &val as *const u32 as *const u8,
+        std::mem::size_of::<u32>() as u32,
+        std::ptr::null(),
+        std::ptr::null(),
+        0,
+        0,
+    );
+    status == 0
+}
+
+fn get_battery_saver_state_sync() -> bool {
+    // 1. Check Win32 GetSystemPowerStatus SystemStatusFlag (1 = battery saver on)
+    unsafe {
+        use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+        let mut sps = SYSTEM_POWER_STATUS::default();
+        if GetSystemPowerStatus(&mut sps).is_ok() && sps.SystemStatusFlag == 1 {
+            return true;
+        }
+    }
+
+    // 2. Check WNF Energy Saver Override (1 = Force ON)
+    unsafe {
+        if let Some(val) = query_wnf_energy_override() {
+            if val == 1 {
+                return true;
+            }
+        }
+    }
+
+    // 3. Check Windows Runtime PowerManager EnergySaverStatus
+    unsafe {
+        let _ = windows::Win32::System::Com::CoInitializeEx(
+            None,
+            windows::Win32::System::Com::COINIT_MULTITHREADED,
+        );
+    }
+    use windows::System::Power::{EnergySaverStatus, PowerManager};
+    match PowerManager::EnergySaverStatus() {
+        Ok(status) => status == EnergySaverStatus::On,
+        Err(_) => false,
+    }
+}
+
+fn try_toggle_battery_saver_in_open_settings(current: bool) -> Option<bool> {
+    unsafe {
+        use windows::core::BOOL;
+        use windows::Win32::Foundation::{HWND, LPARAM};
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+        };
+        use windows::Win32::UI::Accessibility::{
+            CUIAutomation8, IUIAutomation, IUIAutomationInvokePattern,
+            IUIAutomationTogglePattern, ToggleState_Off, TreeScope_Descendants,
+            UIA_InvokePatternId, UIA_TogglePatternId,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, GetClassNameW, GetWindowTextW, IsWindowVisible,
+        };
+
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+        struct TargetWindow {
+            hwnd: HWND,
+            class: String,
+            title: String,
+        }
+
+        unsafe extern "system" fn enum_win(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            if IsWindowVisible(hwnd).as_bool() {
+                let list = &mut *(lparam.0 as *mut Vec<TargetWindow>);
+                let mut title_buf = [0u16; 256];
+                let title_len = GetWindowTextW(hwnd, &mut title_buf);
+                let mut class_buf = [0u16; 256];
+                let class_len = GetClassNameW(hwnd, &mut class_buf);
+
+                let title = String::from_utf16_lossy(&title_buf[..title_len as usize]);
+                let class = String::from_utf16_lossy(&class_buf[..class_len as usize]);
+
+                if class == "ApplicationFrameWindow" {
+                    list.push(TargetWindow { hwnd, class, title });
+                }
+            }
+            BOOL(1)
+        }
+
+        let mut targets: Vec<TargetWindow> = Vec::new();
+        let _ = EnumWindows(Some(enum_win), LPARAM(&mut targets as *mut _ as isize));
+
+        let automation: IUIAutomation =
+            CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER).ok()?;
+        let cond_true = automation.CreateTrueCondition().ok()?;
+
+        // Only search if the user ALREADY has the Settings window open on screen
+        for target in &targets {
+            if target.class == "ApplicationFrameWindow"
+                && (target.title.contains("Settings")
+                    || target.title.contains("System")
+                    || target.title.contains("Power")
+                    || target.title.contains("Battery"))
+            {
+                if let Ok(root) = automation.ElementFromHandle(target.hwnd) {
+                    if let Ok(children) = root.FindAll(TreeScope_Descendants, &cond_true) {
+                        let len = children.Length().unwrap_or(0);
+                        for i in 0..len {
+                            if let Ok(el) = children.GetElement(i) {
+                                let name = el.CurrentName().unwrap_or_default().to_string();
+                                let aid = el.CurrentAutomationId().unwrap_or_default().to_string();
+                                let name_lower = name.to_lowercase();
+                                let aid_lower = aid.to_lowercase();
+
+                                if name_lower.contains("energy saver")
+                                    || name_lower.contains("battery saver")
+                                    || name_lower.contains("turn on now")
+                                    || aid_lower.contains("energysaver")
+                                    || aid_lower.contains("batterysaver")
+                                {
+                                    if let Ok(toggle) = el
+                                        .GetCurrentPatternAs::<IUIAutomationTogglePattern>(
+                                            UIA_TogglePatternId,
+                                        )
+                                    {
+                                        if toggle.Toggle().is_ok() {
+                                            let new_state = toggle.CurrentToggleState().ok();
+                                            return Some(new_state != Some(ToggleState_Off));
+                                        }
+                                    } else if let Ok(invoke) = el
+                                        .GetCurrentPatternAs::<IUIAutomationInvokePattern>(
+                                            UIA_InvokePatternId,
+                                        )
+                                    {
+                                        if invoke.Invoke().is_ok() {
+                                            return Some(!current);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
 
 #[tauri::command]
 pub async fn get_battery_saver_state() -> Result<bool, String> {
-    if BATTERY_SAVER_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
-        return Ok(true);
-    }
-    // Uses Windows Runtime PowerManager — no PowerShell required.
-    tauri::async_runtime::spawn_blocking(|| {
-        unsafe {
-            let _ = windows::Win32::System::Com::CoInitializeEx(
-                None,
-                windows::Win32::System::Com::COINIT_MULTITHREADED,
-            );
-        }
-        use windows::System::Power::{EnergySaverStatus, PowerManager};
-        match PowerManager::EnergySaverStatus() {
-            Ok(status) => Ok(status == EnergySaverStatus::On),
-            Err(_) => Ok(false), // No battery / not supported on this device
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(get_battery_saver_state_sync)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn toggle_battery_saver() -> Result<bool, String> {
-    let current = BATTERY_SAVER_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    let current = get_battery_saver_state_sync();
     let target = !current;
-    BATTERY_SAVER_OVERRIDE.store(target, std::sync::atomic::Ordering::Relaxed);
+
+    // 1. If Settings window is already open, toggle its switch via UI Automation
+    let _ = try_toggle_battery_saver_in_open_settings(current);
+
+    // 2. Update WNF Energy Saver Override silently (1 = Force On, 0 = Off)
+    unsafe {
+        let override_val = if target { 1u32 } else { 0u32 };
+        let _ = set_wnf_energy_override(override_val);
+    }
+
+    // 3. Switch Power Mode Overlay Scheme silently via powrprof.dll
+    unsafe {
+        use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+
+        type FnPowerGetActualOverlayScheme =
+            unsafe extern "system" fn(*mut windows::core::GUID) -> u32;
+        type FnPowerSetActiveOverlayScheme =
+            unsafe extern "system" fn(*const windows::core::GUID) -> u32;
+
+        static PREV_SCHEME: std::sync::Mutex<Option<windows::core::GUID>> =
+            std::sync::Mutex::new(None);
+
+        const BEST_POWER_EFFICIENCY: windows::core::GUID = windows::core::GUID::from_u128(
+            0x961cc777_2547_4f9d_8174_7d86181b8a7a,
+        );
+        const BALANCED: windows::core::GUID = windows::core::GUID::zeroed();
+
+        if let Ok(h_mod) = LoadLibraryW(windows::core::w!("powrprof.dll")) {
+            let p_get = GetProcAddress(
+                h_mod,
+                windows::core::PCSTR(c"PowerGetActualOverlayScheme".as_ptr() as *const u8),
+            );
+            let p_set = GetProcAddress(
+                h_mod,
+                windows::core::PCSTR(c"PowerSetActiveOverlayScheme".as_ptr() as *const u8),
+            );
+
+            if let Some(p_set_fn) = p_set {
+                let power_set: FnPowerSetActiveOverlayScheme = std::mem::transmute(p_set_fn);
+
+                if target {
+                    if let Some(p_get_fn) = p_get {
+                        let power_get: FnPowerGetActualOverlayScheme =
+                            std::mem::transmute(p_get_fn);
+                        let mut current_scheme = windows::core::GUID::zeroed();
+                        if power_get(&mut current_scheme) == 0
+                            && current_scheme != BEST_POWER_EFFICIENCY
+                        {
+                            if let Ok(mut prev) = PREV_SCHEME.lock() {
+                                *prev = Some(current_scheme);
+                            }
+                        }
+                    }
+                    let _ = power_set(&BEST_POWER_EFFICIENCY);
+                } else {
+                    let restore_scheme = if let Ok(mut prev) = PREV_SCHEME.lock() {
+                        prev.take().unwrap_or(BALANCED)
+                    } else {
+                        BALANCED
+                    };
+                    let _ = power_set(&restore_scheme);
+                }
+            }
+        }
+    }
+
     Ok(target)
 }
 
@@ -3489,6 +3728,8 @@ pub fn open_battery_saver_settings() {
 static AIRPLANE_MODE_OVERRIDE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static NIGHT_LIGHT_OVERRIDE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static DND_OVERRIDE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 #[tauri::command]
@@ -3541,33 +3782,97 @@ pub async fn toggle_airplane_mode() -> Result<bool, String> {
 
 #[tauri::command]
 pub fn get_night_light_state() -> Result<bool, String> {
-    if NIGHT_LIGHT_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
-        return Ok(true);
-    }
     unsafe {
         use windows::Win32::System::Registry::{
-            RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER, KEY_READ, REG_BINARY,
+            RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER,
+            KEY_READ, REG_BINARY,
         };
-        let subkey = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current\\default$windows.data.bluelightreduction.bluelightreductionstate\\windows.data.bluelightreduction.bluelightreductionstate");
-        let mut hkey = windows::Win32::System::Registry::HKEY::default();
-        if RegOpenKeyExW(HKEY_CURRENT_USER, subkey, Some(0), KEY_READ, &mut hkey).is_ok() {
-            let mut data = [0u8; 64];
-            let mut val_type = REG_BINARY;
-            let mut val_size = 64u32;
-            let val_name = windows::core::w!("Data");
-            let status = RegQueryValueExW(
-                hkey,
-                val_name,
-                None,
-                Some(&mut val_type),
-                Some(data.as_mut_ptr()),
-                Some(&mut val_size),
-            );
-            let _ = RegCloseKey(hkey);
-            if status.is_ok() && val_size >= 19 {
-                return Ok(data[18] == 0x15);
+        use windows::core::{PCWSTR, PWSTR};
+
+        let root_path = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current");
+        let mut root_key = HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, root_path, Some(0), KEY_READ, &mut root_key).is_ok() {
+            let mut index = 0u32;
+            let mut name_buf = [0u16; 256];
+            loop {
+                let mut name_len = name_buf.len() as u32;
+                let status = RegEnumKeyExW(
+                    root_key,
+                    index,
+                    Some(PWSTR(name_buf.as_mut_ptr())),
+                    &mut name_len,
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                if status.is_err() {
+                    break;
+                }
+                index += 1;
+
+                let key_name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
+                let key_name_lower = key_name.to_lowercase();
+                // Live state is stored exclusively in state keys, not settings keys
+                if key_name_lower.contains("bluelightreduction") && key_name_lower.contains("state") {
+                    let child_name = if let Some(dollar_pos) = key_name.find('$') {
+                        &key_name[dollar_pos + 1..]
+                    } else {
+                        &key_name
+                    };
+
+                    let full_sub = format!(
+                        "Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current\\{}\\{}",
+                        key_name, child_name
+                    );
+                    let full_sub_utf16: Vec<u16> = full_sub.encode_utf16().chain(Some(0)).collect();
+
+                    let mut hkey = HKEY::default();
+                    if RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(full_sub_utf16.as_ptr()), Some(0), KEY_READ, &mut hkey).is_ok() {
+                        let mut data = [0u8; 128];
+                        let mut val_type = REG_BINARY;
+                        let mut val_size = data.len() as u32;
+                        let val_name = windows::core::w!("Data");
+                        let qstatus = RegQueryValueExW(
+                            hkey,
+                            val_name,
+                            None,
+                            Some(&mut val_type),
+                            Some(data.as_mut_ptr()),
+                            Some(&mut val_size),
+                        );
+                        let _ = RegCloseKey(hkey);
+
+                        if qstatus.is_ok() && val_size >= 25 {
+                            let bytes = &data[..val_size as usize];
+                            // 1. Bond struct field 0 (STATUS = 0, STATUS_RUNNING): [0x10, 0x00] immediately after CB header
+                            if bytes.windows(6).any(|w| w == [0x43, 0x42, 0x01, 0x00, 0x10, 0x00]) {
+                                let _ = RegCloseKey(root_key);
+                                return Ok(true);
+                            }
+                            // 2. Direct index check for standard 40/43-byte state payload
+                            if bytes.len() >= 25 && bytes[23] == 0x10 && bytes[24] == 0x00 {
+                                let _ = RegCloseKey(root_key);
+                                return Ok(true);
+                            }
+                            // 3. Fallback: payload length byte indicating active state
+                            let b18 = bytes[18];
+                            if b18 == 0x14 || b18 == 0x15 {
+                                let _ = RegCloseKey(root_key);
+                                return Ok(true);
+                            }
+                        }
+                    }
+                }
             }
+            let _ = RegCloseKey(root_key);
         }
+
+        // Check fallback override
+        if NIGHT_LIGHT_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(true);
+        }
+
         Ok(false)
     }
 }
@@ -3585,28 +3890,23 @@ pub fn toggle_night_light() -> Result<bool, String> {
 
         use windows::Win32::Foundation::HWND;
         use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
+        use windows::Win32::System::Registry::{
+            RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+            HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_BINARY,
+        };
+        use windows::core::{PCWSTR, PWSTR};
 
-        let current = get_night_light_state().unwrap_or_else(|_| {
-            NIGHT_LIGHT_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed)
-        });
+        let current = get_night_light_state().unwrap_or(false);
         let target = !current;
         NIGHT_LIGHT_OVERRIDE.store(target, std::sync::atomic::Ordering::Relaxed);
 
-        // Build gamma ramp: 3 arrays of 256 u16 values [red, green, blue]
+        // Always keep display hardware gamma ramp neutral linear so it never compounds or doubles on top of Windows Night Light
         let mut ramp = [0u16; 768];
         for i in 0..256 {
             let base = (i as u32 * 65535 / 255) as u16;
-            if target {
-                // Warm color temperature: full red, reduced green, lower blue
-                ramp[i] = base;
-                ramp[256 + i] = ((base as f32 * 0.82) as u32).min(65535) as u16;
-                ramp[512 + i] = ((base as f32 * 0.55) as u32).min(65535) as u16;
-            } else {
-                // Linear normal ramp
-                ramp[i] = base;
-                ramp[256 + i] = base;
-                ramp[512 + i] = base;
-            }
+            ramp[i] = base;
+            ramp[256 + i] = base;
+            ramp[512 + i] = base;
         }
 
         let hdc = GetDC(Some(HWND::default()));
@@ -3615,47 +3915,121 @@ pub fn toggle_night_light() -> Result<bool, String> {
             let _ = ReleaseDC(Some(HWND::default()), hdc);
         }
 
-        // Also update CloudStore registry byte 18 if possible
-        use windows::Win32::System::Registry::{
-            RegCloseKey, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY_CURRENT_USER,
-            KEY_READ, KEY_WRITE, REG_BINARY,
-        };
-        let subkey = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current\\default$windows.data.bluelightreduction.bluelightreductionstate\\windows.data.bluelightreduction.bluelightreductionstate");
-        let mut hkey = windows::Win32::System::Registry::HKEY::default();
-        if RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            subkey,
-            Some(0),
-            KEY_READ | KEY_WRITE,
-            &mut hkey,
-        )
-        .is_ok()
-        {
-            let mut data = [0u8; 64];
-            let mut val_type = REG_BINARY;
-            let mut val_size = 64u32;
-            let val_name = windows::core::w!("Data");
-            if RegQueryValueExW(
-                hkey,
-                val_name,
-                None,
-                Some(&mut val_type),
-                Some(data.as_mut_ptr()),
-                Some(&mut val_size),
-            )
-            .is_ok()
-                && val_size >= 19
-            {
-                data[18] = if target { 0x15 } else { 0x13 };
-                let _ = RegSetValueExW(
-                    hkey,
-                    val_name,
-                    Some(0),
-                    REG_BINARY,
-                    Some(&data[..val_size as usize]),
+        // Cleanly toggle CloudStore state keys without touching settings keys
+        let root_path = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current");
+        let mut root_key = HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, root_path, Some(0), KEY_READ, &mut root_key).is_ok() {
+            let mut index = 0u32;
+            let mut name_buf = [0u16; 256];
+            loop {
+                let mut name_len = name_buf.len() as u32;
+                let status = RegEnumKeyExW(
+                    root_key,
+                    index,
+                    Some(PWSTR(name_buf.as_mut_ptr())),
+                    &mut name_len,
+                    None,
+                    None,
+                    None,
+                    None,
                 );
+                if status.is_err() {
+                    break;
+                }
+                index += 1;
+
+                let key_name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
+                let key_name_lower = key_name.to_lowercase();
+                // Strictly modify STATE keys only, NEVER settings keys!
+                if key_name_lower.contains("bluelightreduction") && key_name_lower.contains("state") {
+                    let child_name = if let Some(dollar_pos) = key_name.find('$') {
+                        &key_name[dollar_pos + 1..]
+                    } else {
+                        &key_name
+                    };
+
+                    let full_sub = format!(
+                        "Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current\\{}\\{}",
+                        key_name, child_name
+                    );
+                    let full_sub_utf16: Vec<u16> = full_sub.encode_utf16().chain(Some(0)).collect();
+
+                    let mut hkey = HKEY::default();
+                    if RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(full_sub_utf16.as_ptr()), Some(0), KEY_READ | KEY_WRITE, &mut hkey).is_ok() {
+                        let mut data = [0u8; 128];
+                        let mut val_type = REG_BINARY;
+                        let mut val_size = data.len() as u32;
+                        let val_name = windows::core::w!("Data");
+                        if RegQueryValueExW(
+                            hkey,
+                            val_name,
+                            None,
+                            Some(&mut val_type),
+                            Some(data.as_mut_ptr()),
+                            Some(&mut val_size),
+                        )
+                        .is_ok()
+                            && val_size >= 25
+                        {
+                            let orig_len = val_size as usize;
+                            let is_currently_on = orig_len >= 25 && data[23] == 0x10 && data[24] == 0x00;
+
+                            let mut new_bytes: Vec<u8> = Vec::with_capacity(orig_len + 4);
+                            if target && !is_currently_on {
+                                // Turning ON: insert [0x10, 0x00] at index 23
+                                new_bytes.extend_from_slice(&data[..23.min(orig_len)]);
+                                new_bytes.push(0x10);
+                                new_bytes.push(0x00);
+                                if orig_len > 23 {
+                                    new_bytes.extend_from_slice(&data[23..orig_len]);
+                                }
+                                if new_bytes.len() > 18 {
+                                    new_bytes[18] = new_bytes[18].saturating_add(2);
+                                }
+                                // Advance timestamp counter in envelope
+                                for i in 10..15.min(new_bytes.len()) {
+                                    if new_bytes[i] < 0xFF {
+                                        new_bytes[i] += 1;
+                                        break;
+                                    }
+                                }
+                                let _ = RegSetValueExW(
+                                    hkey,
+                                    val_name,
+                                    Some(0),
+                                    REG_BINARY,
+                                    Some(&new_bytes),
+                                );
+                            } else if !target && is_currently_on {
+                                // Turning OFF: remove bytes at 23..25
+                                new_bytes.extend_from_slice(&data[..23.min(orig_len)]);
+                                if orig_len > 25 {
+                                    new_bytes.extend_from_slice(&data[25..orig_len]);
+                                }
+                                if new_bytes.len() > 18 {
+                                    new_bytes[18] = new_bytes[18].saturating_sub(2);
+                                }
+                                // Advance timestamp counter in envelope
+                                for i in 10..15.min(new_bytes.len()) {
+                                    if new_bytes[i] < 0xFF {
+                                        new_bytes[i] += 1;
+                                        break;
+                                    }
+                                }
+                                let _ = RegSetValueExW(
+                                    hkey,
+                                    val_name,
+                                    Some(0),
+                                    REG_BINARY,
+                                    Some(&new_bytes),
+                                );
+                            }
+                        }
+                        let _ = RegCloseKey(hkey);
+                    }
+                }
             }
-            let _ = RegCloseKey(hkey);
+            let _ = RegCloseKey(root_key);
         }
 
         Ok(target)
@@ -3677,6 +4051,586 @@ pub fn open_night_light_settings() {
         );
     }
 }
+
+#[tauri::command]
+pub fn get_dnd_state() -> Result<bool, String> {
+    unsafe {
+        use windows::Win32::System::Registry::{
+            RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER,
+            KEY_READ, REG_BINARY, REG_DWORD,
+        };
+        use windows::core::{PCWSTR, PWSTR};
+
+        // 1. Inspect Windows 11 CloudStore quiethourssettings (live Windows Settings toggle state)
+        let root_path = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current");
+        let mut root_key = HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, root_path, Some(0), KEY_READ, &mut root_key).is_ok() {
+            let mut index = 0u32;
+            let mut name_buf = [0u16; 256];
+            loop {
+                let mut name_len = name_buf.len() as u32;
+                let status = RegEnumKeyExW(
+                    root_key,
+                    index,
+                    Some(PWSTR(name_buf.as_mut_ptr())),
+                    &mut name_len,
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                if status.is_err() {
+                    break;
+                }
+                index += 1;
+
+                let key_name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
+                let key_name_lower = key_name.to_lowercase();
+                if key_name_lower.contains("donotdisturb.quiethourssettings") {
+                    let child_name = if let Some(dollar_pos) = key_name.find('$') {
+                        &key_name[dollar_pos + 1..]
+                    } else {
+                        &key_name
+                    };
+
+                    let full_sub = format!(
+                        "Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current\\{}\\{}",
+                        key_name, child_name
+                    );
+                    let full_sub_utf16: Vec<u16> = full_sub.encode_utf16().chain(Some(0)).collect();
+
+                    let mut hkey = HKEY::default();
+                    if RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(full_sub_utf16.as_ptr()), Some(0), KEY_READ, &mut hkey).is_ok() {
+                        let mut data = [0u8; 256];
+                        let mut val_type = REG_BINARY;
+                        let mut val_size = data.len() as u32;
+                        let val_name = windows::core::w!("Data");
+                        let qstatus = RegQueryValueExW(
+                            hkey,
+                            val_name,
+                            None,
+                            Some(&mut val_type),
+                            Some(data.as_mut_ptr()),
+                            Some(&mut val_size),
+                        );
+                        let _ = RegCloseKey(hkey);
+
+                        if qstatus.is_ok() && val_size > 0 {
+                            let bytes = &data[..val_size as usize];
+                            let priority_needle: Vec<u16> = "PriorityOnly".encode_utf16().collect();
+                            let priority_bytes: Vec<u8> = priority_needle.iter().flat_map(|u| u.to_le_bytes()).collect();
+                            if bytes.windows(priority_bytes.len()).any(|w| w == priority_bytes.as_slice()) {
+                                let _ = RegCloseKey(root_key);
+                                return Ok(true);
+                            }
+                            let unrestricted_needle: Vec<u16> = "Unrestricted".encode_utf16().collect();
+                            let unrestricted_bytes: Vec<u8> = unrestricted_needle.iter().flat_map(|u| u.to_le_bytes()).collect();
+                            if bytes.windows(unrestricted_bytes.len()).any(|w| w == unrestricted_bytes.as_slice()) {
+                                let _ = RegCloseKey(root_key);
+                                return Ok(false);
+                            }
+                        }
+                    }
+                }
+            }
+            let _ = RegCloseKey(root_key);
+        }
+
+        // 2. Check NOC_GLOBAL_SETTING_DND in Notifications\Settings
+        let notif_path = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings");
+        let mut hkey = HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, notif_path, Some(0), KEY_READ, &mut hkey).is_ok() {
+            let mut val = 0u32;
+            let mut val_type = REG_DWORD;
+            let mut val_size = 4u32;
+            let val_name = windows::core::w!("NOC_GLOBAL_SETTING_DND");
+            let qstatus = RegQueryValueExW(
+                hkey,
+                val_name,
+                None,
+                Some(&mut val_type),
+                Some(&mut val as *mut u32 as *mut u8),
+                Some(&mut val_size),
+            );
+            let _ = RegCloseKey(hkey);
+            if qstatus.is_ok() {
+                return Ok(val == 1);
+            }
+        }
+
+        // 3. Fallback to WNF state query
+        #[link(name = "ntdll")]
+        extern "system" {
+            fn NtQueryWnfStateData(
+                state_name: *const u64,
+                type_id: *const std::ffi::c_void,
+                explicit_scope: *const std::ffi::c_void,
+                change_stamp: *mut u32,
+                buffer: *mut u8,
+                buffer_size: *mut u32,
+            ) -> i32;
+        }
+
+        let state_name: u64 = 0x0D83063EA3BF1C75;
+        let mut change_stamp: u32 = 0;
+        let mut buffer = [0u8; 4];
+        let mut buffer_size: u32 = 4;
+
+        let status = NtQueryWnfStateData(
+            &state_name,
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut change_stamp,
+            buffer.as_mut_ptr(),
+            &mut buffer_size,
+        );
+
+        if status == 0 && buffer_size >= 4 {
+            let val = i32::from_le_bytes(buffer);
+            if val != 0 {
+                return Ok(true);
+            }
+        }
+
+        if DND_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+}
+
+fn try_toggle_dnd_via_uia() -> Option<bool> {
+    unsafe {
+        use windows::core::BOOL;
+        use windows::Win32::Foundation::{HWND, LPARAM};
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+        use windows::Win32::UI::Accessibility::{
+            CUIAutomation8, IUIAutomation, IUIAutomationInvokePattern,
+            IUIAutomationTogglePattern, ToggleState_Off, TreeScope_Descendants,
+            UIA_InvokePatternId, UIA_TogglePatternId,
+        };
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_ESCAPE,
+            VK_LWIN,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, GetClassNameW, GetWindowTextW, IsWindowVisible,
+        };
+
+        struct TargetWindow {
+            hwnd: HWND,
+            class: String,
+            title: String,
+        }
+
+        unsafe extern "system" fn enum_win(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            if IsWindowVisible(hwnd).as_bool() {
+                let list = &mut *(lparam.0 as *mut Vec<TargetWindow>);
+                let mut title_buf = [0u16; 256];
+                let title_len = GetWindowTextW(hwnd, &mut title_buf);
+                let mut class_buf = [0u16; 256];
+                let class_len = GetClassNameW(hwnd, &mut class_buf);
+
+                let title = String::from_utf16_lossy(&title_buf[..title_len as usize]);
+                let class = String::from_utf16_lossy(&class_buf[..class_len as usize]);
+
+                if class == "ApplicationFrameWindow"
+                    || class == "Windows.UI.Core.CoreWindow"
+                    || class == "XamlExplorerHostIslandWindow"
+                {
+                    list.push(TargetWindow { hwnd, class, title });
+                }
+            }
+            BOOL(1)
+        }
+
+        let mut targets: Vec<TargetWindow> = Vec::new();
+        let _ = EnumWindows(Some(enum_win), LPARAM(&mut targets as *mut _ as isize));
+
+        let automation: IUIAutomation = CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER).ok()?;
+        let cond_true = automation.CreateTrueCondition().ok()?;
+
+        // 1. First, search open Settings window (if user has Settings open)
+        for target in &targets {
+            if target.class == "ApplicationFrameWindow"
+                && (target.title.contains("Settings")
+                    || target.title.contains("System")
+                    || target.title.contains("Notifications"))
+            {
+                if let Ok(root) = automation.ElementFromHandle(target.hwnd) {
+                    if let Ok(children) = root.FindAll(TreeScope_Descendants, &cond_true) {
+                        let len = children.Length().unwrap_or(0);
+                        for i in 0..len {
+                            if let Ok(el) = children.GetElement(i) {
+                                let name = el.CurrentName().unwrap_or_default().to_string();
+                                let aid = el.CurrentAutomationId().unwrap_or_default().to_string();
+                                let name_lower = name.to_lowercase();
+                                let aid_lower = aid.to_lowercase();
+
+                                if name_lower.contains("do not disturb")
+                                    || aid_lower.contains("donotdisturb")
+                                    || aid_lower.contains("quiethours")
+                                {
+                                    if let Ok(toggle) = el.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId) {
+                                        if toggle.Toggle().is_ok() {
+                                            let new_state = toggle.CurrentToggleState().ok();
+                                            return Some(new_state != Some(ToggleState_Off));
+                                        }
+                                    } else if let Ok(invoke) = el.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) {
+                                        if invoke.Invoke().is_ok() {
+                                            return Some(true);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. If Settings is not open, open Notification Center via Win+N and toggle the button
+        let n_key = VIRTUAL_KEY(0x4E); // 'N'
+        let open_inputs = [
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_LWIN,
+                        wScan: 0,
+                        dwFlags: Default::default(),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: n_key,
+                        wScan: 0,
+                        dwFlags: Default::default(),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: n_key,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_LWIN,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+        let _ = SendInput(&open_inputs, std::mem::size_of::<INPUT>() as i32);
+        std::thread::sleep(std::time::Duration::from_millis(250));
+
+        let mut notif_targets: Vec<TargetWindow> = Vec::new();
+        let _ = EnumWindows(Some(enum_win), LPARAM(&mut notif_targets as *mut _ as isize));
+
+        let mut toggled_state = None;
+        for target in &notif_targets {
+            if target.class == "Windows.UI.Core.CoreWindow"
+                || target.class == "XamlExplorerHostIslandWindow"
+            {
+                if let Ok(root) = automation.ElementFromHandle(target.hwnd) {
+                    if let Ok(children) = root.FindAll(TreeScope_Descendants, &cond_true) {
+                        let len = children.Length().unwrap_or(0);
+                        for i in 0..len {
+                            if let Ok(el) = children.GetElement(i) {
+                                let name = el.CurrentName().unwrap_or_default().to_string();
+                                let aid = el.CurrentAutomationId().unwrap_or_default().to_string();
+                                let name_lower = name.to_lowercase();
+                                let aid_lower = aid.to_lowercase();
+
+                                if name_lower.contains("do not disturb")
+                                    || aid_lower.contains("donotdisturb")
+                                    || aid_lower.contains("quiethours")
+                                {
+                                    if let Ok(toggle) = el.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId) {
+                                        if toggle.Toggle().is_ok() {
+                                            let new_state = toggle.CurrentToggleState().ok();
+                                            toggled_state = Some(new_state != Some(ToggleState_Off));
+                                            break;
+                                        }
+                                    } else if let Ok(invoke) = el.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) {
+                                        if invoke.Invoke().is_ok() {
+                                            toggled_state = Some(true);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if toggled_state.is_some() {
+                break;
+            }
+        }
+
+        // Close Notification Center with Escape
+        let close_inputs = [
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_ESCAPE,
+                        wScan: 0,
+                        dwFlags: Default::default(),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_ESCAPE,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+        let _ = SendInput(&close_inputs, std::mem::size_of::<INPUT>() as i32);
+
+        toggled_state
+    }
+}
+
+#[tauri::command]
+pub fn toggle_dnd() -> Result<bool, String> {
+    unsafe {
+        #[link(name = "ntdll")]
+        extern "system" {
+            fn NtUpdateWnfStateData(
+                state_name: *const u64,
+                buffer: *const u8,
+                length: u32,
+                type_id: *const std::ffi::c_void,
+                explicit_scope: *const std::ffi::c_void,
+                matching_change_stamp: u32,
+                check_stamp: i32,
+            ) -> i32;
+        }
+
+        use windows::Win32::System::Registry::{
+            RegCloseKey, RegCreateKeyExW, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW,
+            RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_BINARY, REG_DWORD,
+            REG_OPTION_NON_VOLATILE,
+        };
+        use windows::core::{PCWSTR, PWSTR};
+
+        // 1. Try toggling natively through Windows Shell / Settings UI Automation
+        let uia_result = try_toggle_dnd_via_uia();
+        let target = if let Some(state) = uia_result {
+            state
+        } else {
+            let current = get_dnd_state().unwrap_or(false);
+            !current
+        };
+        DND_OVERRIDE.store(target, std::sync::atomic::Ordering::Relaxed);
+
+        // 2. Synchronize Windows 11 CloudStore quiethourssettings across Current and Cloud
+        let target_utf16: Vec<u16> = if target {
+            "Microsoft.QuietHoursProfile.PriorityOnly".encode_utf16().collect()
+        } else {
+            "Microsoft.QuietHoursProfile.Unrestricted".encode_utf16().collect()
+        };
+        let target_bytes: Vec<u8> = target_utf16.iter().flat_map(|u| u.to_le_bytes()).collect();
+
+        let prefix_utf16: Vec<u16> = "Microsoft.QuietHoursProfile.".encode_utf16().collect();
+        let prefix_bytes: Vec<u8> = prefix_utf16.iter().flat_map(|u| u.to_le_bytes()).collect();
+
+        let stores = [
+            windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current"),
+            windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Cloud"),
+        ];
+
+        for (s_idx, store) in stores.iter().enumerate() {
+            let mut root_key = HKEY::default();
+            if RegOpenKeyExW(HKEY_CURRENT_USER, *store, Some(0), KEY_READ, &mut root_key).is_ok() {
+                let mut index = 0u32;
+                let mut name_buf = [0u16; 256];
+                loop {
+                    let mut name_len = name_buf.len() as u32;
+                    let status = RegEnumKeyExW(
+                        root_key,
+                        index,
+                        Some(PWSTR(name_buf.as_mut_ptr())),
+                        &mut name_len,
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                    if status.is_err() {
+                        break;
+                    }
+                    index += 1;
+
+                    let key_name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
+                    let key_name_lower = key_name.to_lowercase();
+                    if key_name_lower.contains("donotdisturb.quiethourssettings") {
+                        let child_name = if let Some(dollar_pos) = key_name.find('$') {
+                            &key_name[dollar_pos + 1..]
+                        } else {
+                            &key_name
+                        };
+
+                        let store_str = if s_idx == 0 {
+                            "Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current"
+                        } else {
+                            "Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Cloud"
+                        };
+
+                        let full_sub = format!("{}\\{}\\{}", store_str, key_name, child_name);
+                        let full_sub_utf16: Vec<u16> = full_sub.encode_utf16().chain(Some(0)).collect();
+
+                        let mut hkey = HKEY::default();
+                        if RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(full_sub_utf16.as_ptr()), Some(0), KEY_READ | KEY_WRITE, &mut hkey).is_ok() {
+                            let mut data = [0u8; 256];
+                            let mut val_type = REG_BINARY;
+                            let mut val_size = data.len() as u32;
+                            let val_name = windows::core::w!("Data");
+                            if RegQueryValueExW(
+                                hkey,
+                                val_name,
+                                None,
+                                Some(&mut val_type),
+                                Some(data.as_mut_ptr()),
+                                Some(&mut val_size),
+                            ).is_ok() && val_size as usize >= target_bytes.len() {
+                                let orig_len = val_size as usize;
+                                let mut found_idx = None;
+                                for i in 0..=orig_len.saturating_sub(target_bytes.len()) {
+                                    if &data[i..i + prefix_bytes.len()] == prefix_bytes.as_slice() {
+                                        found_idx = Some(i);
+                                        break;
+                                    }
+                                }
+
+                                if let Some(idx) = found_idx {
+                                    data[idx..idx + target_bytes.len()].copy_from_slice(&target_bytes);
+                                    for k in 10..15.min(orig_len) {
+                                        if data[k] < 0xFF {
+                                            data[k] += 1;
+                                            break;
+                                        }
+                                    }
+                                    let _ = RegSetValueExW(
+                                        hkey,
+                                        val_name,
+                                        Some(0),
+                                        REG_BINARY,
+                                        Some(&data[..orig_len]),
+                                    );
+                                }
+                            }
+                            let _ = RegCloseKey(hkey);
+                        }
+                    }
+                }
+                let _ = RegCloseKey(root_key);
+            }
+        }
+
+        // 3. Update NOC_GLOBAL_SETTING_DND and NOC_GLOBAL_SETTING_TOASTS_ENABLED in Notifications\Settings
+        let notif_path = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings");
+        let mut hkey = HKEY::default();
+        if RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            notif_path,
+            Some(0),
+            None,
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            None,
+            &mut hkey,
+            None,
+        ).is_ok() {
+            let dnd_val: u32 = if target { 1 } else { 0 };
+            let val_name = windows::core::w!("NOC_GLOBAL_SETTING_DND");
+            let _ = RegSetValueExW(
+                hkey,
+                val_name,
+                Some(0),
+                REG_DWORD,
+                Some(std::slice::from_raw_parts(&dnd_val as *const u32 as *const u8, 4)),
+            );
+
+            let toasts_val: u32 = if target { 0 } else { 1 };
+            let toasts_name = windows::core::w!("NOC_GLOBAL_SETTING_TOASTS_ENABLED");
+            let _ = RegSetValueExW(
+                hkey,
+                toasts_name,
+                Some(0),
+                REG_DWORD,
+                Some(std::slice::from_raw_parts(&toasts_val as *const u32 as *const u8, 4)),
+            );
+            let _ = RegCloseKey(hkey);
+        }
+
+        // 4. Update WNF state
+        let wnf_val: i32 = if target { 1 } else { 0 };
+        let state_name: u64 = 0x0D83063EA3BF1C75;
+        let buf = wnf_val.to_le_bytes();
+        let _ = NtUpdateWnfStateData(
+            &state_name,
+            buf.as_ptr(),
+            4,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            0,
+        );
+
+        Ok(target)
+    }
+}
+
+#[tauri::command]
+pub fn open_focus_assist_settings() {
+    unsafe {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::Shell::ShellExecuteA;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let _ = ShellExecuteA(
+            Some(HWND(std::ptr::null_mut())),
+            windows::core::PCSTR(c"open".as_ptr() as *const u8),
+            windows::core::PCSTR(c"ms-settings:quiethours".as_ptr() as *const u8),
+            windows::core::PCSTR::null(),
+            windows::core::PCSTR::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
 
 #[tauri::command]
 pub fn open_project_menu() {
@@ -5125,3 +6079,4 @@ pub async fn activate_tray_icon(tray_id: String) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?
 }
+

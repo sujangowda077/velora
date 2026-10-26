@@ -100,6 +100,31 @@ fn main() {
 
     diagnostics::initialize();
     setup_brightness_worker();
+
+    // Ensure display hardware gamma ramp starts neutral linear so it never doubles over Windows Night Light
+    unsafe {
+        #[link(name = "gdi32")]
+        extern "system" {
+            fn SetDeviceGammaRamp(
+                hdc: windows::Win32::Graphics::Gdi::HDC,
+                lp_ramp: *const std::ffi::c_void,
+            ) -> i32;
+        }
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
+        let mut ramp = [0u16; 768];
+        for i in 0..256 {
+            let base = (i as u32 * 65535 / 255) as u16;
+            ramp[i] = base;
+            ramp[256 + i] = base;
+            ramp[512 + i] = base;
+        }
+        let hdc = GetDC(Some(HWND::default()));
+        if !hdc.is_invalid() {
+            let _ = SetDeviceGammaRamp(hdc, ramp.as_ptr() as *const _);
+            let _ = ReleaseDC(Some(HWND::default()), hdc);
+        }
+    }
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -189,6 +214,9 @@ fn main() {
             get_night_light_state,
             toggle_night_light,
             open_night_light_settings,
+            get_dnd_state,
+            toggle_dnd,
+            open_focus_assist_settings,
             open_project_menu,
             open_cast_menu,
             toggle_live_captions,
