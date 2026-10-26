@@ -241,7 +241,7 @@ body {
 .dock {
 	display: flex;
 	flex-direction: row;
-	align-items: center;
+	align-items: flex-end;
 	justify-content: center;
 	gap: 12px;
 	padding: 8px 8px;
@@ -267,7 +267,7 @@ body {
 .dock-reorder-container {
 	display: flex;
 	flex-direction: row;
-	align-items: center;
+	align-items: flex-end;
 	gap: 12px;
 	overflow: visible;
 }
@@ -275,7 +275,7 @@ body {
 .dock-reorder-group {
 	display: flex;
 	flex-direction: row;
-	align-items: center;
+	align-items: flex-end;
 	gap: 12px;
 }
 
@@ -284,6 +284,8 @@ body {
 	height: 26px;
 	flex: none;
 	margin: 0 2px;
+	align-self: flex-end;
+	margin-bottom: 7px;
 	border-radius: 1px;
 	background: color-mix(in srgb, var(--velora-text, white) 24%, transparent);
 	pointer-events: none;
@@ -292,19 +294,22 @@ body {
 .dock-icon-wrapper {
 	position: relative;
 	display: flex;
-	justify-content: center;
+	flex-direction: column;
+	justify-content: flex-end;
 	align-items: center;
 	cursor: pointer;
 	-webkit-app-region: no-drag;
 }
 
 .dock-icon {
-	width: 36px;
-	height: 36px;
+	width: 40px;
+	height: 40px;
+	aspect-ratio: 1 / 1;
 	display: flex;
 	justify-content: center;
 	align-items: center;
-	border-radius: 12px;
+	border-radius: 24%;
+	transform-origin: bottom center;
 	background: linear-gradient(135deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.05) 100%);
 	color: var(--velora-text, white);
 	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
@@ -312,8 +317,8 @@ body {
 }
 
 .dock-icon img {
-	width: 28px;
-	height: 28px;
+	width: 70%;
+	height: 70%;
 	object-fit: contain;
 	pointer-events: none;
 	-webkit-user-drag: none;
@@ -321,8 +326,8 @@ body {
 }
 
 .dock-icon svg {
-	width: 24px;
-	height: 24px;
+	width: 60%;
+	height: 60%;
 	stroke: rgba(255, 255, 255, 0.9);
 }
 
@@ -333,12 +338,12 @@ body {
 }
 
 .dock-icon-only .dock-icon img {
-	width: 32px;
-	height: 32px;
+	width: 80%;
+	height: 80%;
 }
 
 .dock-icon-only .fallback-icon {
-	font-size: 16px;
+	font-size: 18px;
 }
 
 /* Active application indicator */

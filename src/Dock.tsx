@@ -165,27 +165,24 @@ const DockItemIcon = memo(function DockItemIcon({
 	...rest
 }: DockItemIconProps) {
 	const ref = useRef<HTMLDivElement>(null);
-	const distance = useTransform(mouseX, (val) => {
-		if (!magnificationEnabled || val === Infinity || !ref.current) return 0;
-		const rect = ref.current.getBoundingClientRect();
-		return val - (rect.left + rect.width / 2);
+
+	// 1. Calculate distance from mouse to the center of this icon
+	const distance = useTransform(mouseX, (val: number) => {
+		if (!magnificationEnabled || val === Infinity) return 1000;
+		const bounds = ref.current?.getBoundingClientRect() ?? { x: 0, width: 0 };
+		return val - bounds.x - bounds.width / 2;
 	});
 
-	const targetScale = useTransform(distance, (d) => {
-		if (!magnificationEnabled || d === 0) return 1;
-		const R = 115;
-		const absD = Math.abs(d);
-		if (absD >= R) return 1;
-		return 1 + 0.44 * Math.pow(Math.cos((absD / R) * (Math.PI / 2)), 2);
-	});
+	// 2. Transform distance: icon scales from 40px up to 64px when cursor is directly over it (Apple standard magnification)
+	const widthSync = useTransform(distance, [-140, 0, 140], [40, 64, 40]);
 
-	const springScale = useSpring(targetScale, { stiffness: 450, damping: 28, mass: 0.1 });
-	const springY = useTransform(springScale, (s) => (s - 1) * -14);
+	// 3. Apply spring physics for that signature smooth Apple bounce
+	const width = useSpring(widthSync, { mass: 0.1, stiffness: 150, damping: 12 });
 
 	return (
 		<motion.div
 			ref={ref}
-			className={`dock-icon ${className}`}
+			className={`dock-icon aspect-square relative ${className}`}
 			variants={variants}
 			animate={
 				pressed
@@ -198,10 +195,9 @@ const DockItemIcon = memo(function DockItemIcon({
 			}
 			whileDrag={whileDrag}
 			style={{
-				...style,
-				scale: magnificationEnabled ? springScale : undefined,
-				y: magnificationEnabled ? springY : undefined,
-				transformOrigin: "bottom center"
+				width: magnificationEnabled ? width : undefined,
+				height: magnificationEnabled ? width : undefined,
+				...style
 			}}
 			{...rest}
 		>
@@ -411,6 +407,9 @@ const Dock = memo(function Dock() {
 	);
 	const [dockShowRecentsEnabled, setDockShowRecentsEnabled] = useState(
 		() => localStorage.getItem("velora-dock-show-recents") !== "false"
+	);
+	const [dockShowIndicators, setDockShowIndicators] = useState(
+		() => localStorage.getItem("velora-dock-show-indicators") !== "false"
 	);
 	const mouseX = useMotionValue(Infinity);
 	const [activeStack, setActiveStack] = useState<{
@@ -639,6 +638,9 @@ const Dock = memo(function Dock() {
 			const recents = getVal("velora-dock-show-recents", "true");
 			setDockShowRecentsEnabled(recents !== "false");
 
+			const indicators = getVal("velora-dock-show-indicators", "true");
+			setDockShowIndicators(indicators !== "false");
+
 			const scaleVal = getVal("velora-scale");
 			if (scaleVal !== null) setScale(parseFloat(scaleVal));
 
@@ -719,7 +721,8 @@ const Dock = memo(function Dock() {
 		"velora-dock-magnification": setDockMagnificationEnabled,
 		"velora-dock-folder-stacks": setDockFolderStacksEnabled,
 		"velora-dock-badges": setDockBadgesEnabled,
-		"velora-dock-show-recents": setDockShowRecentsEnabled
+		"velora-dock-show-recents": setDockShowRecentsEnabled,
+		"velora-dock-show-indicators": setDockShowIndicators
 	});
 
 	useEffect(() => {
@@ -1822,7 +1825,7 @@ const Dock = memo(function Dock() {
 											as="div"
 											key={itemKey(app)}
 											value={itemKey(app)}
-											style={{ position: "relative" }}
+											style={{ position: "relative", display: "flex", alignItems: "flex-end" }}
 											onDragStart={() => {
 												setIsDragging(true);
 												if (previewLeaveTimerRef.current) clearTimeout(previewLeaveTimerRef.current);
@@ -1973,7 +1976,7 @@ const Dock = memo(function Dock() {
 														</div>
 													);
 												})()}
-												{app.is_running && (
+												{dockShowIndicators && app.is_running && (
 													<WindowDots
 														count={app.all_hwnds?.length ?? 1}
 														background={app.is_background}
@@ -2139,7 +2142,7 @@ const Dock = memo(function Dock() {
 												</div>
 											);
 										})()}
-										{app.is_running && (
+										{dockShowIndicators && app.is_running && (
 											<WindowDots
 												count={app.all_hwnds?.length ?? 1}
 												background={app.is_background}

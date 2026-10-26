@@ -3801,258 +3801,32 @@ pub async fn toggle_airplane_mode() -> Result<bool, String> {
 
 #[tauri::command]
 pub fn get_night_light_state() -> Result<bool, String> {
-    unsafe {
-        use windows::Win32::System::Registry::{
-            RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER,
-            KEY_READ, REG_BINARY,
-        };
-        use windows::core::{PCWSTR, PWSTR};
-
-        let root_path = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current");
-        let mut root_key = HKEY::default();
-        if RegOpenKeyExW(HKEY_CURRENT_USER, root_path, Some(0), KEY_READ, &mut root_key).is_ok() {
-            let mut index = 0u32;
-            let mut name_buf = [0u16; 256];
-            loop {
-                let mut name_len = name_buf.len() as u32;
-                let status = RegEnumKeyExW(
-                    root_key,
-                    index,
-                    Some(PWSTR(name_buf.as_mut_ptr())),
-                    &mut name_len,
-                    None,
-                    None,
-                    None,
-                    None,
-                );
-                if status.is_err() {
-                    break;
-                }
-                index += 1;
-
-                let key_name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
-                let key_name_lower = key_name.to_lowercase();
-                // Live state is stored exclusively in state keys, not settings keys
-                if key_name_lower.contains("bluelightreduction") && key_name_lower.contains("state") {
-                    let child_name = if let Some(dollar_pos) = key_name.find('$') {
-                        &key_name[dollar_pos + 1..]
-                    } else {
-                        &key_name
-                    };
-
-                    let full_sub = format!(
-                        "Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current\\{}\\{}",
-                        key_name, child_name
-                    );
-                    let full_sub_utf16: Vec<u16> = full_sub.encode_utf16().chain(Some(0)).collect();
-
-                    let mut hkey = HKEY::default();
-                    if RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(full_sub_utf16.as_ptr()), Some(0), KEY_READ, &mut hkey).is_ok() {
-                        let mut data = [0u8; 128];
-                        let mut val_type = REG_BINARY;
-                        let mut val_size = data.len() as u32;
-                        let val_name = windows::core::w!("Data");
-                        let qstatus = RegQueryValueExW(
-                            hkey,
-                            val_name,
-                            None,
-                            Some(&mut val_type),
-                            Some(data.as_mut_ptr()),
-                            Some(&mut val_size),
-                        );
-                        let _ = RegCloseKey(hkey);
-
-                        if qstatus.is_ok() && val_size >= 25 {
-                            let bytes = &data[..val_size as usize];
-                            // 1. Bond struct field 0 (STATUS = 0, STATUS_RUNNING): [0x10, 0x00] immediately after CB header
-                            if bytes.windows(6).any(|w| w == [0x43, 0x42, 0x01, 0x00, 0x10, 0x00]) {
-                                let _ = RegCloseKey(root_key);
-                                return Ok(true);
-                            }
-                            // 2. Direct index check for standard 40/43-byte state payload
-                            if bytes.len() >= 25 && bytes[23] == 0x10 && bytes[24] == 0x00 {
-                                let _ = RegCloseKey(root_key);
-                                return Ok(true);
-                            }
-                            // 3. Fallback: payload length byte indicating active state
-                            let b18 = bytes[18];
-                            if b18 == 0x14 || b18 == 0x15 {
-                                let _ = RegCloseKey(root_key);
-                                return Ok(true);
-                            }
-                        }
-                    }
-                }
-            }
-            let _ = RegCloseKey(root_key);
-        }
-
-        // Check fallback override
-        if NIGHT_LIGHT_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
-            return Ok(true);
-        }
-
-        Ok(false)
+    if let Ok(state) = win_nightlight_lib::Nightlight::new().read_state() {
+        let active = state.is_active();
+        NIGHT_LIGHT_OVERRIDE.store(active, std::sync::atomic::Ordering::Relaxed);
+        return Ok(active);
     }
+    Ok(NIGHT_LIGHT_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 #[tauri::command]
 pub fn toggle_night_light() -> Result<bool, String> {
-    unsafe {
-        #[link(name = "gdi32")]
-        extern "system" {
-            fn SetDeviceGammaRamp(
-                hdc: windows::Win32::Graphics::Gdi::HDC,
-                lp_ramp: *const std::ffi::c_void,
-            ) -> i32;
+    let nightlight = win_nightlight_lib::Nightlight::new();
+    let result = nightlight.toggle();
+    let new_state = match result {
+        Ok(active) => active,
+        Err(e) => {
+            eprintln!("[velora] Failed to toggle night light via win_nightlight_lib: {e}");
+            let current = nightlight.read_state().map(|s| s.is_active()).unwrap_or_else(|_| {
+                NIGHT_LIGHT_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed)
+            });
+            let target = !current;
+            let _ = nightlight.set_active(target);
+            target
         }
-
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
-        use windows::Win32::System::Registry::{
-            RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
-            HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_BINARY,
-        };
-        use windows::core::{PCWSTR, PWSTR};
-
-        let current = get_night_light_state().unwrap_or(false);
-        let target = !current;
-        NIGHT_LIGHT_OVERRIDE.store(target, std::sync::atomic::Ordering::Relaxed);
-
-        // Always keep display hardware gamma ramp neutral linear so it never compounds or doubles on top of Windows Night Light
-        let mut ramp = [0u16; 768];
-        for i in 0..256 {
-            let base = (i as u32 * 65535 / 255) as u16;
-            ramp[i] = base;
-            ramp[256 + i] = base;
-            ramp[512 + i] = base;
-        }
-
-        let hdc = GetDC(Some(HWND::default()));
-        if !hdc.is_invalid() {
-            let _ = SetDeviceGammaRamp(hdc, ramp.as_ptr() as *const _);
-            let _ = ReleaseDC(Some(HWND::default()), hdc);
-        }
-
-        // Cleanly toggle CloudStore state keys without touching settings keys
-        let root_path = windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current");
-        let mut root_key = HKEY::default();
-        if RegOpenKeyExW(HKEY_CURRENT_USER, root_path, Some(0), KEY_READ, &mut root_key).is_ok() {
-            let mut index = 0u32;
-            let mut name_buf = [0u16; 256];
-            loop {
-                let mut name_len = name_buf.len() as u32;
-                let status = RegEnumKeyExW(
-                    root_key,
-                    index,
-                    Some(PWSTR(name_buf.as_mut_ptr())),
-                    &mut name_len,
-                    None,
-                    None,
-                    None,
-                    None,
-                );
-                if status.is_err() {
-                    break;
-                }
-                index += 1;
-
-                let key_name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
-                let key_name_lower = key_name.to_lowercase();
-                // Strictly modify STATE keys only, NEVER settings keys!
-                if key_name_lower.contains("bluelightreduction") && key_name_lower.contains("state") {
-                    let child_name = if let Some(dollar_pos) = key_name.find('$') {
-                        &key_name[dollar_pos + 1..]
-                    } else {
-                        &key_name
-                    };
-
-                    let full_sub = format!(
-                        "Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\DefaultAccount\\Current\\{}\\{}",
-                        key_name, child_name
-                    );
-                    let full_sub_utf16: Vec<u16> = full_sub.encode_utf16().chain(Some(0)).collect();
-
-                    let mut hkey = HKEY::default();
-                    if RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(full_sub_utf16.as_ptr()), Some(0), KEY_READ | KEY_WRITE, &mut hkey).is_ok() {
-                        let mut data = [0u8; 128];
-                        let mut val_type = REG_BINARY;
-                        let mut val_size = data.len() as u32;
-                        let val_name = windows::core::w!("Data");
-                        if RegQueryValueExW(
-                            hkey,
-                            val_name,
-                            None,
-                            Some(&mut val_type),
-                            Some(data.as_mut_ptr()),
-                            Some(&mut val_size),
-                        )
-                        .is_ok()
-                            && val_size >= 25
-                        {
-                            let orig_len = val_size as usize;
-                            let is_currently_on = orig_len >= 25 && data[23] == 0x10 && data[24] == 0x00;
-
-                            let mut new_bytes: Vec<u8> = Vec::with_capacity(orig_len + 4);
-                            if target && !is_currently_on {
-                                // Turning ON: insert [0x10, 0x00] at index 23
-                                new_bytes.extend_from_slice(&data[..23.min(orig_len)]);
-                                new_bytes.push(0x10);
-                                new_bytes.push(0x00);
-                                if orig_len > 23 {
-                                    new_bytes.extend_from_slice(&data[23..orig_len]);
-                                }
-                                if new_bytes.len() > 18 {
-                                    new_bytes[18] = new_bytes[18].saturating_add(2);
-                                }
-                                // Advance timestamp counter in envelope
-                                for i in 10..15.min(new_bytes.len()) {
-                                    if new_bytes[i] < 0xFF {
-                                        new_bytes[i] += 1;
-                                        break;
-                                    }
-                                }
-                                let _ = RegSetValueExW(
-                                    hkey,
-                                    val_name,
-                                    Some(0),
-                                    REG_BINARY,
-                                    Some(&new_bytes),
-                                );
-                            } else if !target && is_currently_on {
-                                // Turning OFF: remove bytes at 23..25
-                                new_bytes.extend_from_slice(&data[..23.min(orig_len)]);
-                                if orig_len > 25 {
-                                    new_bytes.extend_from_slice(&data[25..orig_len]);
-                                }
-                                if new_bytes.len() > 18 {
-                                    new_bytes[18] = new_bytes[18].saturating_sub(2);
-                                }
-                                // Advance timestamp counter in envelope
-                                for i in 10..15.min(new_bytes.len()) {
-                                    if new_bytes[i] < 0xFF {
-                                        new_bytes[i] += 1;
-                                        break;
-                                    }
-                                }
-                                let _ = RegSetValueExW(
-                                    hkey,
-                                    val_name,
-                                    Some(0),
-                                    REG_BINARY,
-                                    Some(&new_bytes),
-                                );
-                            }
-                        }
-                        let _ = RegCloseKey(hkey);
-                    }
-                }
-            }
-            let _ = RegCloseKey(root_key);
-        }
-
-        Ok(target)
-    }
+    };
+    NIGHT_LIGHT_OVERRIDE.store(new_state, std::sync::atomic::Ordering::Relaxed);
+    Ok(new_state)
 }
 
 #[tauri::command]
@@ -6097,5 +5871,29 @@ pub async fn activate_tray_icon(tray_id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || crate::tray::interact(&tray_id, false))
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod night_light_tests {
+    use super::*;
+
+    #[test]
+    fn test_night_light_read() {
+        let state = get_night_light_state();
+        println!("get_night_light_state returned: {:?}", state);
+        assert!(state.is_ok());
+    }
+
+    #[test]
+    fn test_night_light_toggle() {
+        let initial = get_night_light_state().unwrap_or(false);
+        println!("Initial state: {initial}");
+        let toggled = toggle_night_light().expect("toggle should succeed");
+        println!("Toggled state: {toggled}");
+        assert_eq!(toggled, !initial);
+        let toggled_back = toggle_night_light().expect("toggle back should succeed");
+        println!("Toggled back state: {toggled_back}");
+        assert_eq!(toggled_back, initial);
+    }
 }
 
