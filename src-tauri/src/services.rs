@@ -517,7 +517,7 @@ unsafe extern "system" fn focus_event_proc(
 
 static THUMB_CAPTURE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
-const MAX_CACHED_THUMBNAILS: usize = 15;
+const MAX_CACHED_THUMBNAILS: usize = 64;
 
 fn trim_thumbnail_cache(
     cache: &mut std::collections::HashMap<isize, (String, i64)>,
@@ -4504,13 +4504,13 @@ mod tests {
 
     #[test]
     fn thumbnail_cache_evicts_oldest_live_windows() {
-        let mut cache = (0..20)
+        let mut cache = (0..80)
             .map(|key| (key, (String::new(), key as i64)))
             .collect();
-        trim_thumbnail_cache(&mut cache, 19, |_| true);
-        assert_eq!(cache.len(), 15);
-        assert!(cache.contains_key(&19));
-        assert!((0..5).all(|key| !cache.contains_key(&key)));
+        trim_thumbnail_cache(&mut cache, 79, |_| true);
+        assert_eq!(cache.len(), 64);
+        assert!(cache.contains_key(&79));
+        assert!((0..16).all(|key| !cache.contains_key(&key)));
     }
 
     #[test]

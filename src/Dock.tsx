@@ -1451,14 +1451,22 @@ const Dock = memo(function Dock() {
 		hoveredAppRef.current = hoveredApp;
 
 		if (!hoveredApp) {
-			const timer = setTimeout(() => setPreviewData(null), 100);
+			const timer = setTimeout(() => setPreviewData(null), 250);
 			return () => clearTimeout(timer);
 		}
 
 		if (hoveredApp && !isDragging) {
 			const app = dockItems.find((a) => itemKey(a) === hoveredApp);
 			if (app && app.is_running && !app.is_background) {
-				const hwndsToCapture = app.all_hwnds || (app.hwnd ? [[app.hwnd, app.name]] : []);
+				const rawHwnds = (app.all_hwnds && app.all_hwnds.length > 0)
+					? app.all_hwnds
+					: (app.hwnd ? [[app.hwnd, app.name]] : []);
+				const hwndsToCapture = rawHwnds.filter(([h]) => typeof h === "number" && h > 0);
+
+				if (hwndsToCapture.length === 0) {
+					setPreviewData(null);
+					return;
+				}
 
 				previewTimerRef.current = setTimeout(async () => {
 					try {
@@ -1470,12 +1478,15 @@ const Dock = memo(function Dock() {
 										maxWidth: 320,
 										maxHeight: 200
 									});
-									if (res) {
+									if (res && res[0]) {
 										const [image, lastFocused] = res;
-										return { hwnd, title, image, lastFocused };
+										return { hwnd, title: title || app.name, image, lastFocused };
 									}
-								} catch { }
-								return null;
+								} catch (err) {
+									console.warn("Failed to capture thumbnail for hwnd:", hwnd, err);
+								}
+								// Return window item even if live pixel capture is unavailable
+								return { hwnd, title: title || app.name, image: "", lastFocused: 0 };
 							})
 						);
 
@@ -1497,7 +1508,7 @@ const Dock = memo(function Dock() {
 						console.error("Failed to capture thumbnails:", e);
 						setPreviewData(null);
 					}
-				}, 300);
+				}, 250);
 			} else {
 				setPreviewData(null);
 			}
@@ -1825,7 +1836,18 @@ const Dock = memo(function Dock() {
 																			className="preview-item"
 																			onClick={() => invoke("focus_window", { hwnd: prev.hwnd })}
 																		>
-																			<img src={prev.image} alt={`Preview ${idx}`} />
+																			{prev.image ? (
+																				<img src={prev.image} alt={`Preview ${idx}`} />
+																			) : (
+																				<div className="preview-fallback-card">
+																					{app.icon ? (
+																						<img src={app.icon} className="preview-fallback-icon" alt="" />
+																					) : (
+																						<div className="preview-fallback-ph">🪟</div>
+																					)}
+																					<span className="preview-fallback-badge">Live Window</span>
+																				</div>
+																			)}
 																			<div className="preview-label">{prev.title || app.name}</div>
 																			<button
 																				className="preview-close-btn"
@@ -1992,7 +2014,18 @@ const Dock = memo(function Dock() {
 																	className="preview-item"
 																	onClick={() => invoke("focus_window", { hwnd: prev.hwnd })}
 																>
-																	<img src={prev.image} alt={`Preview ${idx}`} />
+																	{prev.image ? (
+																		<img src={prev.image} alt={`Preview ${idx}`} />
+																	) : (
+																		<div className="preview-fallback-card">
+																			{app.icon ? (
+																				<img src={app.icon} className="preview-fallback-icon" alt="" />
+																			) : (
+																				<div className="preview-fallback-ph">🪟</div>
+																			)}
+																			<span className="preview-fallback-badge">Live Window</span>
+																		</div>
+																	)}
 																	<div className="preview-label">{prev.title || app.name}</div>
 																	<button
 																		className="preview-close-btn"

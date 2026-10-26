@@ -3217,10 +3217,6 @@ pub async fn capture_window_thumbnail(
         }
 
         if is_minimized {
-            // Never restore a minimized window to capture it: that briefly
-            // un-minimizes it on screen. Thumbnails are kept warm by the
-            // minimize/focus window hooks, so minimized windows normally have
-            // a cached image already; without one we simply show no preview.
             let cached_img = if let Some(cache) = crate::state::THUMBNAIL_CACHE.get() {
                 cache
                     .lock()
@@ -3229,7 +3225,15 @@ pub async fn capture_window_thumbnail(
             } else {
                 None
             };
-            return cached_img.map(|img| (img, focus_time));
+            if let Some(img) = cached_img {
+                return Some((img, focus_time));
+            }
+            // Fallback for minimized window if not cached: attempt capture using normal placement bounds
+            let result = crate::utils::capture_hwnd_to_base64(hwnd, max_width, max_height);
+            if let Some(ref img) = result {
+                crate::services::cache_thumbnail(hwnd_key, img.clone());
+            }
+            return result.map(|img| (img, focus_time));
         }
 
         let result = crate::utils::capture_hwnd_to_base64(hwnd, max_width, max_height);
