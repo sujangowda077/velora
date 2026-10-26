@@ -138,6 +138,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             hide_native_osd,
             open_settings_window,
+            close_settings_window,
             open_wifi_settings,
             open_sound_settings,
             open_notification_center,
@@ -252,6 +253,7 @@ fn main() {
             dock_extras::open_dock_extra,
             dock_extras::eject_dock_extra,
             dock_extras::get_dock_drives,
+            dock_extras::get_folder_stack,
             wifi::wifi_list_networks,
             wifi::wifi_scan,
             wifi::wifi_connect,

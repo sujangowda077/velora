@@ -4090,6 +4090,8 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
                             .to_string()
                     } else if name == "explorer" && title.is_empty() {
                         "File Explorer".to_string()
+                    } else if (lowercase_path.contains("velora.exe") || name == "velora") && title == "Settings" {
+                        "Settings".to_string()
                     } else {
                         // The Start menu name ("WhatsApp", "LocalSend") rather than
                         // the executable's ("WhatsApp.Root", "localsend_app").

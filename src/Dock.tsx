@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, memo } from "react";
-import { motion, AnimatePresence, Reorder } from "framer-motion";
+import { motion, AnimatePresence, Reorder, useMotionValue, useTransform, useSpring, type MotionValue } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./Dock.css";
@@ -8,33 +8,23 @@ import { initTheme } from "./theme";
 import { useSettingsSync } from "./hooks/useSettingsSync";
 import { reloadIfMirrorWasStale } from "./hooks/settingsMirror";
 
-import { mergeTrayApps, selectDockTrayApps, type AppInfo, type TrayApp } from "./dockApps";
-import { driveLetter, hideDrive, removeCustomFolder, type DockExtra } from "./dockExtras";
+import {
+	mergeTrayApps,
+	selectDockTrayApps,
+	isBrowserHost,
+	appIdentity,
+	itemKey,
+	fileOf,
+	isIdentifier,
+	isVeloraSettingsApp,
+	isSameApp,
+	type AppInfo,
+	type TrayApp
+} from "./dockApps";
+import { driveLetter, hideDrive, removeCustomFolder, type DockExtra, type FolderFileEntry } from "./dockExtras";
 import { createRegionSender, measureElements, padRect, type RegionRect } from "./windowRegion";
 
-// Host processes (Edge/Chrome/Brave/ApplicationFrameHost) run every PWA/UWP
-// window, so their window title must be part of their identity — otherwise two
-// PWAs running under the same browser collapse into a single dock item.
-const HOST_PROCESSES = ["msedge.exe", "chrome.exe", "brave.exe", "applicationframehost.exe"];
-export function isBrowserHost(path: string) {
-	const p = path.toLowerCase();
-	return HOST_PROCESSES.some((host) => p.includes(host));
-}
-
-// Stable identity for a dock item.
-export function appIdentity(p: string, executable?: string, name?: string) {
-	if (!p) return "";
-	const normalized = p.toLowerCase().replace(/\\/g, "/");
-	// Shell application ids (AUMIDs) and bare names are unique on their own.
-	if (!normalized.includes("/")) return normalized;
-	if (name && isBrowserHost(normalized)) {
-		return `${normalized}:${name.toLowerCase()}`;
-	}
-	if (executable) return `${normalized}:${executable.toLowerCase()}`;
-	return normalized;
-}
-
-const itemKey = (app: AppInfo) => appIdentity(app.path, app.executable, app.name);
+export { isBrowserHost, appIdentity, isVeloraSettingsApp, isSameApp };
 
 // WinEvent notifications can arrive for windows that do not change the dock.
 // Keep the existing array when its visible content is identical so Framer
@@ -58,51 +48,6 @@ function sameRunningApps(left: AppInfo[], right: AppInfo[]): boolean {
 		})
 	);
 }
-
-// Fuzzy identity: a running window and its installed/pinned entry often carry
-// different paths (exe vs .lnk vs AUMID), so exact keys miss and the same app
-// looks pinnable twice. Mirrors the dock list's own pinned↔running matching.
-export function isSameApp(a: AppInfo, b: AppInfo): boolean {
-	if (!a.path || !b.path) return false;
-	if (itemKey(a) === itemKey(b)) return true;
-	// Browser hosts run many apps under one exe — only the full identity
-	// (which folds in the window/AUMID name) can match those.
-	if (isBrowserHost(a.path) || isBrowserHost(b.path)) return false;
-	const aId = isIdentifier(a.path);
-	const bId = isIdentifier(b.path);
-	// Two opaque shell ids match only exactly (checked above).
-	if (aId && bId) return false;
-	if (aId !== bId) {
-		// One side is a shell id (AUMID), the other a file path. AUMIDs embed
-		// the product name (ZedIndustries.Zed, com.squirrel.Figma.Figma), so
-		// match on overlapping display names plus id/stem cross-containment.
-		// This is the common shape: installed entries come from the AppsFolder
-		// scan (AUMID) while pinned entries are exe/.lnk paths.
-		const fileSide = aId ? b : a;
-		const idLower = (aId ? a : b).path.toLowerCase();
-		const na = a.name.toLowerCase();
-		const nb = b.name.toLowerCase();
-		if (na !== nb && !na.includes(nb) && !nb.includes(na)) return false;
-		const stem = (fileSide.executable?.toLowerCase() || fileOf(fileSide.path)).replace(
-			/\.(exe|lnk)$/,
-			""
-		);
-		return stem.length >= 3 && idLower.includes(stem);
-	}
-	if (appIdentity(a.path) === appIdentity(b.path)) return true;
-	const normExe = (s: string) => (s.endsWith(".exe") ? s : `${s}.exe`);
-	const aExe = a.executable?.toLowerCase() || fileOf(a.path);
-	const bExe = b.executable?.toLowerCase() || fileOf(b.path);
-	if (!aExe || !bExe) return false;
-	return normExe(aExe) === normExe(bExe);
-}
-
-const fileOf = (p: string) =>
-	(p.split("/").pop()?.split("\\").pop()?.toLowerCase() || "").replace(/\.lnk$/, "");
-
-// Shell application ids (AUMIDs) identify one specific app; two different PWAs
-// running in the same browser must never be matched by their shared exe name.
-const isIdentifier = (p: string) => !p.includes("/") && !p.includes("\\");
 
 // Resolve the configured start-button icon to a public asset, or to the data
 // URI of a user-uploaded icon (stored with a "custom:" prefix).
@@ -150,6 +95,276 @@ function WindowDots({ count, background }: { count: number; background?: boolean
 	);
 }
 
+export function getBadgeCount(app: AppInfo): number {
+	let maxCount = 0;
+	const countRegex = /(?:\((\d+)\+?\)|\[(\d+)\+?\])/;
+	const textRegex = /(?:^|\s)(\d+)\s+(?:new|unread|messages?|notifications?)/i;
+
+	const testTitle = (title?: string) => {
+		if (!title) return;
+		const countMatch = countRegex.exec(title);
+		if (countMatch) {
+			const n = parseInt(countMatch[1] || countMatch[2], 10);
+			if (!isNaN(n) && n > 0) maxCount = Math.max(maxCount, n);
+			return;
+		}
+		const textMatch = textRegex.exec(title);
+		if (textMatch) {
+			const n = parseInt(textMatch[1], 10);
+			if (!isNaN(n) && n > 0) maxCount = Math.max(maxCount, n);
+		}
+	};
+
+	if (app.all_hwnds) {
+		for (const [, title] of app.all_hwnds) {
+			testTitle(title);
+		}
+	}
+	if (app.name) {
+		testTitle(app.name);
+	}
+	return maxCount;
+}
+
+function formatFileSize(bytes: number): string {
+	if (bytes === 0) return "";
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+	if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+interface DockItemIconProps {
+	mouseX: MotionValue<number>;
+	magnificationEnabled: boolean;
+	pressed: boolean;
+	hovered: boolean;
+	isDragging?: boolean;
+	variants: any;
+	whileDrag?: string;
+	children: React.ReactNode;
+	className?: string;
+	style?: React.CSSProperties;
+	onPointerDown?: (e: React.PointerEvent) => void;
+	onPointerUp?: (e: React.PointerEvent) => void;
+	onPointerCancel?: (e: React.PointerEvent) => void;
+	onClick?: (e: React.MouseEvent) => void;
+}
+
+const DockItemIcon = memo(function DockItemIcon({
+	mouseX,
+	magnificationEnabled,
+	pressed,
+	hovered,
+	isDragging = false,
+	variants,
+	whileDrag,
+	children,
+	className = "",
+	style = {},
+	...rest
+}: DockItemIconProps) {
+	const ref = useRef<HTMLDivElement>(null);
+	const distance = useTransform(mouseX, (val) => {
+		if (!magnificationEnabled || val === Infinity || !ref.current) return 0;
+		const rect = ref.current.getBoundingClientRect();
+		return val - (rect.left + rect.width / 2);
+	});
+
+	const targetScale = useTransform(distance, (d) => {
+		if (!magnificationEnabled || d === 0) return 1;
+		const R = 115;
+		const absD = Math.abs(d);
+		if (absD >= R) return 1;
+		return 1 + 0.44 * Math.pow(Math.cos((absD / R) * (Math.PI / 2)), 2);
+	});
+
+	const springScale = useSpring(targetScale, { stiffness: 450, damping: 28, mass: 0.1 });
+	const springY = useTransform(springScale, (s) => (s - 1) * -14);
+
+	return (
+		<motion.div
+			ref={ref}
+			className={`dock-icon ${className}`}
+			variants={variants}
+			animate={
+				pressed
+					? "tap"
+					: isDragging
+						? "idle"
+						: hovered && !magnificationEnabled
+							? "hover"
+							: "idle"
+			}
+			whileDrag={whileDrag}
+			style={{
+				...style,
+				scale: magnificationEnabled ? springScale : undefined,
+				y: magnificationEnabled ? springY : undefined,
+				transformOrigin: "bottom center"
+			}}
+			{...rest}
+		>
+			{children}
+		</motion.div>
+	);
+});
+
+const FolderStackPopover = memo(function FolderStackPopover({
+	stack,
+	scale,
+	onClose,
+	onOpenFile,
+	onOpenFolder,
+	onToggleViewMode
+}: {
+	stack: {
+		extra: DockExtra;
+		files: FolderFileEntry[];
+		anchorX: number;
+		viewMode: "fan" | "grid";
+	};
+	scale: number;
+	onClose: () => void;
+	onOpenFile: (file: FolderFileEntry) => void;
+	onOpenFolder: () => void;
+	onToggleViewMode: () => void;
+}) {
+	const estimatedWidth = stack.viewMode === "grid" ? 420 : 280;
+	const margin = 16;
+	const left = Math.max(
+		margin + estimatedWidth / 2,
+		Math.min(window.innerWidth - margin - estimatedWidth / 2, stack.anchorX)
+	);
+
+	return (
+		<motion.div
+			className="folder-stack-popover"
+			initial={{ opacity: 0, y: 15, scale: 0.95 }}
+			animate={{ opacity: 1, y: 0, scale: 1 }}
+			exit={{ opacity: 0, y: 10, scale: 0.95 }}
+			transition={{ duration: 0.18, ease: "easeOut" }}
+			style={{
+				left: left / scale,
+				zoom: scale
+			}}
+			onClick={(e) => e.stopPropagation()}
+		>
+			<div className="folder-stack-header">
+				<div className="folder-stack-title-group">
+					{stack.extra.icon && (
+						<img src={stack.extra.icon} alt="" className="folder-stack-icon" draggable={false} />
+					)}
+					<div>
+						<div className="folder-stack-title">{stack.extra.name}</div>
+						<div className="folder-stack-count">
+							{stack.files.length} {stack.files.length === 1 ? "item" : "items"}
+						</div>
+					</div>
+				</div>
+				<div className="folder-stack-actions">
+					<button
+						type="button"
+						className={`folder-stack-mode-btn ${stack.viewMode === "grid" ? "active" : ""}`}
+						title={stack.viewMode === "grid" ? "Switch to Fan View" : "Switch to Grid View"}
+						onClick={onToggleViewMode}
+					>
+						{stack.viewMode === "grid" ? "Fan" : "Grid"}
+					</button>
+					<button type="button" className="folder-stack-mode-btn" title="Close" onClick={onClose}>
+						✕
+					</button>
+				</div>
+			</div>
+
+			{stack.files.length === 0 ? (
+				<div
+					style={{
+						padding: "24px 16px",
+						textAlign: "center",
+						color: "rgba(255,255,255,0.4)",
+						fontSize: "12px"
+					}}
+				>
+					Folder is empty
+				</div>
+			) : stack.viewMode === "grid" ? (
+				<div className="folder-stack-grid">
+					{stack.files.map((file) => (
+						<div
+							key={file.path}
+							className="folder-stack-item"
+							title={file.name}
+							onClick={() => onOpenFile(file)}
+						>
+							{file.icon ? (
+								<img src={file.icon} alt={file.name} draggable={false} />
+							) : (
+								<div
+									className="fallback-icon"
+									style={{ width: 44, height: 44, borderRadius: 8, fontSize: 18 }}
+								>
+									{file.is_dir ? "📁" : "📄"}
+								</div>
+							)}
+							<div className="folder-stack-item-name">{file.name}</div>
+							<div className="folder-stack-item-size">
+								{file.is_dir ? "Folder" : formatFileSize(file.size_bytes)}
+							</div>
+						</div>
+					))}
+				</div>
+			) : (
+				<div className="folder-stack-fan">
+					{stack.files.map((file) => (
+						<div
+							key={file.path}
+							className="folder-stack-fan-item"
+							title={file.name}
+							onClick={() => onOpenFile(file)}
+						>
+							{file.icon ? (
+								<img src={file.icon} alt={file.name} draggable={false} />
+							) : (
+								<div
+									className="fallback-icon"
+									style={{ width: 32, height: 32, borderRadius: 6, fontSize: 14 }}
+								>
+									{file.is_dir ? "📁" : "📄"}
+								</div>
+							)}
+							<div className="folder-stack-fan-item-info">
+								<div className="folder-stack-fan-item-name">{file.name}</div>
+								<div className="folder-stack-fan-item-size">
+									{file.is_dir ? "Folder" : formatFileSize(file.size_bytes)}
+								</div>
+							</div>
+						</div>
+					))}
+				</div>
+			)}
+
+			<div className="folder-stack-footer">
+				<button type="button" className="folder-stack-open-btn" onClick={onOpenFolder}>
+					<svg
+						width="14"
+						height="14"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="2"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+					>
+						<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+					</svg>
+					Open in File Explorer
+				</button>
+			</div>
+		</motion.div>
+	);
+});
+
 const Dock = memo(function Dock() {
 	useEffect(() => {
 		return initTheme();
@@ -185,6 +400,35 @@ const Dock = memo(function Dock() {
 	const [dockExtrasPosition, setDockExtrasPosition] = useState(
 		() => localStorage.getItem("velora-dock-extras-position") || "off"
 	);
+	const [dockMagnificationEnabled, setDockMagnificationEnabled] = useState(
+		() => localStorage.getItem("velora-dock-magnification") !== "false"
+	);
+	const [dockFolderStacksEnabled, setDockFolderStacksEnabled] = useState(
+		() => localStorage.getItem("velora-dock-folder-stacks") !== "false"
+	);
+	const [dockBadgesEnabled, setDockBadgesEnabled] = useState(
+		() => localStorage.getItem("velora-dock-badges") !== "false"
+	);
+	const [dockShowRecentsEnabled, setDockShowRecentsEnabled] = useState(
+		() => localStorage.getItem("velora-dock-show-recents") !== "false"
+	);
+	const mouseX = useMotionValue(Infinity);
+	const [activeStack, setActiveStack] = useState<{
+		extra: DockExtra;
+		files: FolderFileEntry[];
+		anchorX: number;
+		viewMode: "fan" | "grid";
+	} | null>(null);
+	const [recentApps, setRecentApps] = useState<AppInfo[]>(() => {
+		try {
+			const raw = localStorage.getItem("velora-recent-apps");
+			return raw
+				? (JSON.parse(raw) as AppInfo[]).filter((item) => !isVeloraSettingsApp(item))
+				: [];
+		} catch {
+			return [];
+		}
+	});
 	const [dockExtras, setDockExtras] = useState<DockExtra[]>([]);
 	const [dockExtrasRevision, setDockExtrasRevision] = useState(0);
 	const [isMaximized, setIsMaximized] = useState(false);
@@ -383,6 +627,18 @@ const Dock = memo(function Dock() {
 			const extrasPosition = getVal("velora-dock-extras-position", "off");
 			if (extrasPosition) setDockExtrasPosition(extrasPosition);
 
+			const magn = getVal("velora-dock-magnification", "true");
+			setDockMagnificationEnabled(magn !== "false");
+
+			const stacks = getVal("velora-dock-folder-stacks", "true");
+			setDockFolderStacksEnabled(stacks !== "false");
+
+			const badges = getVal("velora-dock-badges", "true");
+			setDockBadgesEnabled(badges !== "false");
+
+			const recents = getVal("velora-dock-show-recents", "true");
+			setDockShowRecentsEnabled(recents !== "false");
+
 			const scaleVal = getVal("velora-scale");
 			if (scaleVal !== null) setScale(parseFloat(scaleVal));
 
@@ -459,7 +715,11 @@ const Dock = memo(function Dock() {
 		"velora-dock-extras-recycle-bin": () => setDockExtrasRevision((r) => r + 1),
 		"velora-dock-extras-hidden-drives": () => setDockExtrasRevision((r) => r + 1),
 		"velora-dock-extras-folders": () => setDockExtrasRevision((r) => r + 1),
-		"velora-dock-extras-custom-folders": () => setDockExtrasRevision((r) => r + 1)
+		"velora-dock-extras-custom-folders": () => setDockExtrasRevision((r) => r + 1),
+		"velora-dock-magnification": setDockMagnificationEnabled,
+		"velora-dock-folder-stacks": setDockFolderStacksEnabled,
+		"velora-dock-badges": setDockBadgesEnabled,
+		"velora-dock-show-recents": setDockShowRecentsEnabled
 	});
 
 	useEffect(() => {
@@ -537,6 +797,45 @@ const Dock = memo(function Dock() {
 			});
 
 			running.forEach((app) => fetchIcon(app.path, app.name, app.hwnd));
+
+			if (dockShowRecentsEnabled) {
+				const unpinnedRunning = running.filter(
+					(r) =>
+						r.path !== "start" &&
+						!isVeloraSettingsApp(r) &&
+						!pinnedApps.some((p) => isSameApp(p, r))
+				);
+				if (unpinnedRunning.length > 0) {
+					setRecentApps((prev) => {
+						let updated = [...prev];
+						for (const app of unpinnedRunning) {
+							const id = itemKey(app);
+							updated = updated.filter((item) => itemKey(item) !== id);
+							updated.unshift({
+								name: app.name,
+								path: app.path,
+								icon: app.icon,
+								is_running: false,
+								executable: app.executable
+							});
+						}
+						const filtered = updated
+							.filter(
+								(item) =>
+									!isVeloraSettingsApp(item) &&
+									!pinnedApps.some((p) => isSameApp(p, item))
+							)
+							.slice(0, 3);
+						if (JSON.stringify(filtered.map(itemKey)) !== JSON.stringify(prev.map(itemKey))) {
+							try {
+								localStorage.setItem("velora-recent-apps", JSON.stringify(filtered));
+							} catch {}
+							return filtered;
+						}
+						return prev;
+					});
+				}
+			}
 		};
 
 		poll();
@@ -745,7 +1044,34 @@ const Dock = memo(function Dock() {
 		setContextMenu({ x: e.clientX, y: e.clientY, app });
 	};
 
-	const handleExtraClick = (extra: DockExtra) => {
+	const handleExtraClick = async (extra: DockExtra, e?: React.MouseEvent) => {
+		if (
+			dockFolderStacksEnabled &&
+			(extra.kind === "folder" || extra.kind === "custom") &&
+			extra.path &&
+			!extra.path.startsWith("shell:")
+		) {
+			if (activeStack?.extra.id === extra.id) {
+				setActiveStack(null);
+				return;
+			}
+			try {
+				const files = await invoke<FolderFileEntry[]>("get_folder_stack", {
+					path: extra.path,
+					maxItems: 12
+				});
+				const clickX = e ? e.clientX : window.innerWidth / 2;
+				setActiveStack({
+					extra,
+					files,
+					anchorX: clickX,
+					viewMode: files.length <= 5 ? "fan" : "grid"
+				});
+				return;
+			} catch (err) {
+				console.error("Failed to load folder stack:", err);
+			}
+		}
 		invoke("open_dock_extra", { kind: extra.kind, path: extra.path }).catch(showActionError);
 	};
 
@@ -819,6 +1145,7 @@ const Dock = memo(function Dock() {
 	const closeMenu = () => {
 		setContextMenu(null);
 		setActiveSubmenu(null);
+		setActiveStack(null);
 		invoke("set_menu_open", { open: false, rect: null }).catch(() => { });
 	};
 
@@ -835,6 +1162,7 @@ const Dock = memo(function Dock() {
 			setContextMenu(null);
 			setActiveSubmenu(null);
 			setShowAddPopup(false);
+			setActiveStack(null);
 		});
 		return () => {
 			unlisten.then((f) => f());
@@ -875,7 +1203,8 @@ const Dock = memo(function Dock() {
 				[".preview-tooltip", 40],
 				[".context-menu", 34],
 				[".submenu", 34],
-				[".dock-toast", 20]
+				[".dock-toast", 20],
+				[".folder-stack-popover", 40]
 			])
 		);
 		// The Add App popup grows from scaleY 0, and that animation doesn't
@@ -914,10 +1243,22 @@ const Dock = memo(function Dock() {
 				height: Math.round(r.height)
 			};
 			open = true;
+		} else if (activeStack) {
+			const el = document.querySelector(".folder-stack-popover");
+			if (el) {
+				const r = el.getBoundingClientRect();
+				rect = {
+					x: Math.round(r.x),
+					y: Math.round(r.y),
+					width: Math.round(r.width),
+					height: Math.round(r.height)
+				};
+				open = true;
+			}
 		}
 
 		invoke("set_menu_open", { open, rect }).catch(() => { });
-	}, [contextMenu, menuPos, showAddPopup, pinnedApps, activeApps, activeSubmenu, scale]);
+	}, [contextMenu, menuPos, showAddPopup, activeStack, pinnedApps, activeApps, activeSubmenu, scale]);
 
 	const dockItems = useMemo(() => {
 		const runningMap = new Map();
@@ -1022,8 +1363,26 @@ const Dock = memo(function Dock() {
 					!!a && !matchedRunningKeys.has(appIdentity(a.path, a.executable, a.name))
 			);
 
-		return [...pinned, ...unpinned];
-	}, [pinnedApps, activeApps, activeOrder]);
+		let finalUnpinned = unpinned;
+		if (dockShowRecentsEnabled) {
+			const activeKeys = new Set(unpinned.map(itemKey));
+			const closedRecents = recentApps
+				.filter(
+					(r) =>
+						!activeKeys.has(itemKey(r)) &&
+						!isVeloraSettingsApp(r) &&
+						!pinnedApps.some((p) => isSameApp(p, r))
+				)
+				.map((r) => ({
+					...r,
+					is_running: false,
+					is_pinned: false
+				}));
+			finalUnpinned = [...unpinned, ...closedRecents];
+		}
+
+		return [...pinned, ...finalUnpinned];
+	}, [pinnedApps, activeApps, activeOrder, dockShowRecentsEnabled, recentApps]);
 
 	const startItem = useMemo(
 		() => dockItems.find((i) => i.path === "start") as AppInfo,
@@ -1175,14 +1534,16 @@ const Dock = memo(function Dock() {
 			}}
 			onClick={(e) => {
 				e.stopPropagation();
-				handleExtraClick(extra);
+				handleExtraClick(extra, e);
 			}}
 		>
 			{hoveredApp === extra.id && <div className="tooltip">{extra.name}</div>}
-			<motion.div
-				className="dock-icon"
+			<DockItemIcon
+				mouseX={mouseX}
+				magnificationEnabled={dockMagnificationEnabled}
+				pressed={pressedApp === extra.id}
+				hovered={hoveredApp === extra.id}
 				variants={iconVariants}
-				animate={pressedApp === extra.id ? "tap" : hoveredApp === extra.id ? "hover" : "idle"}
 				onPointerDown={() => setPressedApp(extra.id)}
 				onPointerUp={() => setPressedApp(null)}
 				onPointerCancel={() => setPressedApp(null)}
@@ -1192,7 +1553,7 @@ const Dock = memo(function Dock() {
 				) : (
 					<div className="fallback-icon">{extra.name[0]}</div>
 				)}
-			</motion.div>
+			</DockItemIcon>
 		</motion.div>
 	);
 
@@ -1211,8 +1572,10 @@ const Dock = memo(function Dock() {
 					ref={dockRef}
 					layout
 					className={`dock ${isExpanded && !isHidden ? "dock-expanded" : ""} ${isImpacted && !isExpanded && !isHidden ? "dock-impacted" : ""} ${dockIconOnly ? "dock-icon-only" : ""} ${isAdaptive ? "dock-adaptive" : ""}`}
+					onMouseMove={(e) => mouseX.set(e.clientX)}
 					onMouseEnter={() => setIsDockHovered(true)}
 					onMouseLeave={() => {
+						mouseX.set(Infinity);
 						setIsDockHovered(false);
 						setHoveredApp(null);
 						setPressedApp(null);
@@ -1256,6 +1619,35 @@ const Dock = memo(function Dock() {
 				>
 					<EdgeSurface edge="bottom" flares={isExpanded && !isHidden} />
 					<AnimatePresence>
+						{activeStack && (
+							<FolderStackPopover
+								stack={activeStack}
+								scale={scale}
+								onClose={() => setActiveStack(null)}
+								onOpenFile={(file) => {
+									setActiveStack(null);
+									invoke("open_dock_extra", {
+										kind: file.is_dir ? "folder" : "file",
+										path: file.path
+									}).catch(showActionError);
+								}}
+								onOpenFolder={() => {
+									const extra = activeStack.extra;
+									setActiveStack(null);
+									invoke("open_dock_extra", {
+										kind: extra.kind,
+										path: extra.path
+									}).catch(showActionError);
+								}}
+								onToggleViewMode={() => {
+									setActiveStack((prev) =>
+										prev ? { ...prev, viewMode: prev.viewMode === "grid" ? "fan" : "grid" } : null
+									);
+								}}
+							/>
+						)}
+					</AnimatePresence>
+					<AnimatePresence>
 						{isExpanded && (
 							<motion.div
 								key="dock-content"
@@ -1285,20 +1677,16 @@ const Dock = memo(function Dock() {
 											(dockPreviewEnabled && hoveredApp === itemKey(startItem))) && (
 												<div className="tooltip">{startItem.name}</div>
 											)}
-										<motion.div
-											className="dock-icon"
+										<DockItemIcon
+											mouseX={mouseX}
+											magnificationEnabled={dockMagnificationEnabled}
+											pressed={pressedApp === itemKey(startItem)}
+											hovered={hoveredApp === itemKey(startItem)}
 											variants={iconVariants}
-											animate={
-												pressedApp === itemKey(startItem)
-													? "tap"
-													: hoveredApp === itemKey(startItem)
-														? "hover"
-														: "idle"
-											}
 											onPointerDown={() => setPressedApp(itemKey(startItem))}
 											onPointerUp={() => setPressedApp(null)}
 											onPointerCancel={() => setPressedApp(null)}
-											onClick={(e) => {
+											onClick={(e: React.MouseEvent) => {
 												e.stopPropagation();
 												handleAppClick(startItem);
 											}}
@@ -1312,7 +1700,7 @@ const Dock = memo(function Dock() {
 												}
 												draggable={false}
 											/>
-										</motion.div>
+										</DockItemIcon>
 									</motion.div>
 								)}
 
@@ -1337,26 +1725,22 @@ const Dock = memo(function Dock() {
 										{(!dockPreviewEnabled || hoveredApp === "task-view") && (
 											<div className="tooltip">Task View</div>
 										)}
-										<motion.div
-											className="dock-icon"
+										<DockItemIcon
+											mouseX={mouseX}
+											magnificationEnabled={dockMagnificationEnabled}
+											pressed={pressedApp === "task-view"}
+											hovered={hoveredApp === "task-view"}
 											variants={iconVariants}
-											animate={
-												pressedApp === "task-view"
-													? "tap"
-													: hoveredApp === "task-view"
-														? "hover"
-														: "idle"
-											}
 											onPointerDown={() => setPressedApp("task-view")}
 											onPointerUp={() => setPressedApp(null)}
 											onPointerCancel={() => setPressedApp(null)}
-											onClick={(e) => {
+											onClick={(e: React.MouseEvent) => {
 												e.stopPropagation();
 												openTaskView();
 											}}
 										>
 											<TaskViewIcon />
-										</motion.div>
+										</DockItemIcon>
 									</motion.div>
 								)}
 
@@ -1473,18 +1857,13 @@ const Dock = memo(function Dock() {
 													(dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && (
 														<div className="tooltip">{app.name}</div>
 													)}
-												<motion.div
-													className="dock-icon"
+												<DockItemIcon
+													mouseX={mouseX}
+													magnificationEnabled={dockMagnificationEnabled}
+													pressed={pressedApp === itemKey(app)}
+													hovered={hoveredApp === itemKey(app)}
+													isDragging={isDragging}
 													variants={iconVariants}
-													animate={
-														pressedApp === itemKey(app)
-															? "tap"
-															: isDragging && !app.is_pinned
-																? "idle"
-																: hoveredApp === itemKey(app) && !isDragging
-																	? "hover"
-																	: "idle"
-													}
 													whileDrag="drag"
 													onPointerDown={() => setPressedApp(itemKey(app))}
 													onPointerUp={() => setPressedApp(null)}
@@ -1508,10 +1887,7 @@ const Dock = memo(function Dock() {
 															(allowPathFallback && iconsRef.current[app.path]) ||
 															app.icon;
 
-														const isVeloraOrSettings =
-															app.name.toLowerCase() === "settings" ||
-															app.name.toLowerCase() === "velora" ||
-															app.path.toLowerCase().includes("velora.exe");
+														const isVeloraOrSettings = isVeloraSettingsApp(app);
 
 														const finalIcon = isVeloraOrSettings ? "/velora.png" : icon;
 
@@ -1526,7 +1902,16 @@ const Dock = memo(function Dock() {
 															<div className="fallback-icon">{app.name[0]}</div>
 														);
 													})()}
-												</motion.div>
+												</DockItemIcon>
+												{dockBadgesEnabled && (() => {
+													const count = getBadgeCount(app);
+													if (count <= 0) return null;
+													return (
+														<div className="dock-badge">
+															{count > 99 ? "99+" : count}
+														</div>
+													);
+												})()}
 												{app.is_running && (
 													<WindowDots
 														count={app.all_hwnds?.length ?? 1}
@@ -1637,16 +2022,12 @@ const Dock = memo(function Dock() {
 											(dockPreviewEnabled && hoveredApp === itemKey(app) && !previewData)) && (
 												<div className="tooltip">{app.name}</div>
 											)}
-										<motion.div
-											className="dock-icon"
+										<DockItemIcon
+											mouseX={mouseX}
+											magnificationEnabled={dockMagnificationEnabled}
+											pressed={pressedApp === itemKey(app)}
+											hovered={hoveredApp === itemKey(app)}
 											variants={iconVariants}
-											animate={
-												pressedApp === itemKey(app)
-													? "tap"
-													: hoveredApp === itemKey(app) && !isDragging
-														? "hover"
-														: "idle"
-											}
 											onPointerDown={() => setPressedApp(itemKey(app))}
 											onPointerUp={() => setPressedApp(null)}
 											onPointerCancel={() => setPressedApp(null)}
@@ -1668,10 +2049,7 @@ const Dock = memo(function Dock() {
 													iconsRef.current[cacheKey] ||
 													(allowPathFallback && iconsRef.current[app.path]) ||
 													app.icon;
-												const isVeloraOrSettings =
-													app.name.toLowerCase() === "settings" ||
-													app.name.toLowerCase() === "velora" ||
-													app.path.toLowerCase().includes("velora.exe");
+												const isVeloraOrSettings = isVeloraSettingsApp(app);
 
 												const finalIcon = isVeloraOrSettings ? "/velora.png" : icon;
 
@@ -1686,7 +2064,16 @@ const Dock = memo(function Dock() {
 													<div className="fallback-icon">{app.name[0]}</div>
 												);
 											})()}
-										</motion.div>
+										</DockItemIcon>
+										{dockBadgesEnabled && (() => {
+											const count = getBadgeCount(app);
+											if (count <= 0) return null;
+											return (
+												<div className="dock-badge">
+													{count > 99 ? "99+" : count}
+												</div>
+											);
+										})()}
 										{app.is_running && (
 											<WindowDots
 												count={app.all_hwnds?.length ?? 1}
@@ -1821,9 +2208,39 @@ const Dock = memo(function Dock() {
 						</>
 					) : contextMenu.app ? (
 						<>
+							{!contextMenu.app.is_running && contextMenu.app.path !== "start" && (
+								<div
+									className="menu-item"
+									onClick={() => {
+										const app = contextMenu.app!;
+										closeMenu();
+										handleAppClick(app);
+									}}
+								>
+									Open
+								</div>
+							)}
 							<div className="menu-item" onClick={() => togglePin(contextMenu.app!)}>
 								{contextMenu.app.is_pinned ? "Unpin from Dock" : "Pin to Dock"}
 							</div>
+							{!contextMenu.app.is_pinned && recentApps.some((r) => isSameApp(r, contextMenu.app!)) && (
+								<div
+									className="menu-item"
+									onClick={() => {
+										const app = contextMenu.app!;
+										closeMenu();
+										setRecentApps((prev) => {
+											const next = prev.filter((r) => !isSameApp(r, app));
+											try {
+												localStorage.setItem("velora-recent-apps", JSON.stringify(next));
+											} catch {}
+											return next;
+										});
+									}}
+								>
+									Remove from Recents
+								</div>
+							)}
 							{contextMenu.app.is_pinned && contextMenu.app.path !== "start" && (
 								<>
 									<div className="menu-divider" />

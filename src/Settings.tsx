@@ -62,21 +62,50 @@ function SettingsApp() {
 		}).catch(console.error);
 	}, [settings.scale]);
 
-	const handleClose = async (e: React.MouseEvent) => {
-		e.preventDefault();
-		e.stopPropagation();
+	const handleClose = async (e?: React.SyntheticEvent) => {
+		if (e) {
+			e.preventDefault();
+			e.stopPropagation();
+		}
+		try {
+			await invoke("close_settings_window");
+		} catch (err) {
+			console.error("Failed to close settings via invoke:", err);
+		}
 		try {
 			await appWindow.hide();
-		} catch {}
+		} catch (err) {
+			console.error("Failed to hide settings window:", err);
+		}
 	};
+
+	useEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			if (e.key === "Escape") {
+				handleClose();
+			}
+		};
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, []);
 
 	return (
 		<div className="settings-container" style={{ zoom: settings.scale }}>
-			<div className="title-bar" data-tauri-drag-region>
-				<span className="title-text" data-tauri-drag-region>
-					Settings
-				</span>
-				<button className="close-btn" onClick={handleClose} title="Close Settings">
+			<div className="title-bar">
+				<div className="title-bar-drag" data-tauri-drag-region>
+					<span className="title-text" data-tauri-drag-region>
+						Settings
+					</span>
+				</div>
+				<button
+					type="button"
+					className="close-btn"
+					data-tauri-drag-region="false"
+					onPointerDown={(e) => e.stopPropagation()}
+					onMouseDown={(e) => e.stopPropagation()}
+					onClick={handleClose}
+					title="Close Settings"
+				>
 					<X size={12} strokeWidth={1.5} className="close-btn-icon" />
 				</button>
 			</div>
@@ -237,6 +266,14 @@ function SettingsApp() {
 							handleRemoveDockExtraFolder={settings.handleRemoveDockExtraFolder}
 							startIcon={settings.startIcon}
 							handleStartIconChange={settings.handleStartIconChange}
+							dockMagnification={settings.dockMagnification}
+							toggleDockMagnification={settings.toggleDockMagnification}
+							dockFolderStacks={settings.dockFolderStacks}
+							toggleDockFolderStacks={settings.toggleDockFolderStacks}
+							dockBadges={settings.dockBadges}
+							toggleDockBadges={settings.toggleDockBadges}
+							dockShowRecents={settings.dockShowRecents}
+							toggleDockShowRecents={settings.toggleDockShowRecents}
 						/>
 					)}
 					{activeTab === "overlays" && (

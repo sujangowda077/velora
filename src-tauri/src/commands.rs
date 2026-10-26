@@ -2231,6 +2231,21 @@ pub fn open_settings_window(app: AppHandle) {
                 let _ = SetForegroundWindow(hwnd);
             }
         }
+        let _ = app.emit("windows-changed", ());
+    }
+}
+
+#[tauri::command]
+pub fn close_settings_window(app: AppHandle) {
+    if let Some(win) = app.get_webview_window("settings") {
+        let _ = win.hide();
+        if let Ok(hwnd) = win.hwnd() {
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+        let _ = app.emit("windows-changed", ());
     }
 }
 

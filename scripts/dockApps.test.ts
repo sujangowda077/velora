@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mergeTrayApps, selectDockTrayApps, type AppInfo, type TrayApp } from "../src/dockApps";
+import {
+	mergeTrayApps,
+	selectDockTrayApps,
+	isSameApp,
+	isVeloraSettingsApp,
+	type AppInfo,
+	type TrayApp
+} from "../src/dockApps";
 const tray: TrayApp = {
 	name: "Discord",
 	path: "C:\\Apps\\Discord.exe",
@@ -78,5 +85,43 @@ describe("dock tray lifecycle", () => {
 	test("does not match a different process by display name", () => {
 		const other = { ...windowApp, hwnd: 99, all_hwnds: [[99, "Discord"]] as [number, string][] };
 		expect(mergeTrayApps([other], [tray])).toHaveLength(2);
+	});
+});
+
+describe("Velora settings dock deduplication", () => {
+	const pinnedSettings: AppInfo = {
+		name: "Settings",
+		path: "velora-settings",
+		icon: null,
+		is_running: false
+	};
+
+	const runningSettings: AppInfo = {
+		name: "Settings",
+		path: "C:\\projects\\velora\\src-tauri\\target\\debug\\velora.exe",
+		executable: "velora.exe",
+		icon: null,
+		is_running: true,
+		hwnd: 12345
+	};
+
+	const windowsSettings: AppInfo = {
+		name: "Settings",
+		path: "C:\\Windows\\System32\\SystemSettings.exe",
+		executable: "SystemSettings.exe",
+		icon: null,
+		is_running: true,
+		hwnd: 54321
+	};
+
+	test("recognizes pinned and running Velora Settings as the same app", () => {
+		expect(isVeloraSettingsApp(pinnedSettings)).toBe(true);
+		expect(isVeloraSettingsApp(runningSettings)).toBe(true);
+		expect(isSameApp(pinnedSettings, runningSettings)).toBe(true);
+	});
+
+	test("does not match Windows Settings as Velora Settings", () => {
+		expect(isVeloraSettingsApp(windowsSettings)).toBe(false);
+		expect(isSameApp(pinnedSettings, windowsSettings)).toBe(false);
 	});
 });

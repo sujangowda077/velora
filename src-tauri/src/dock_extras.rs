@@ -46,6 +46,16 @@ pub struct CustomFolder {
     pub path: String,
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct FolderFileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size_bytes: u64,
+    pub modified_ms: i64,
+    pub icon: Option<String>,
+}
+
 static DOCK_EXTRA_ICONS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
 fn to_wide(value: &str) -> Vec<u16> {
@@ -509,6 +519,85 @@ pub async fn eject_dock_extra(path: String) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Lists recent files/folders in a directory for macOS-style dock stacks / fan preview.
+#[tauri::command]
+pub async fn get_folder_stack(
+    path: String,
+    max_items: Option<usize>,
+) -> Result<Vec<FolderFileEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+        let com_initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
+
+        let dir_path = std::path::Path::new(&path);
+        if !dir_path.exists() || !dir_path.is_dir() {
+            if com_initialized {
+                unsafe { CoUninitialize() };
+            }
+            return Err(format!("Directory does not exist: {}", path));
+        }
+
+        let limit = max_items.unwrap_or(12).clamp(1, 40);
+        let mut raw_entries = Vec::new();
+
+        if let Ok(read_dir) = std::fs::read_dir(dir_path) {
+            for entry in read_dir.flatten() {
+                let file_name = entry.file_name().to_string_lossy().to_string();
+                if file_name.starts_with('.')
+                    || file_name.starts_with('$')
+                    || file_name.eq_ignore_ascii_case("desktop.ini")
+                    || file_name.eq_ignore_ascii_case("thumbs.db")
+                {
+                    continue;
+                }
+                let entry_path = entry.path();
+                let path_str = entry_path.to_string_lossy().to_string();
+                let metadata = match entry.metadata() {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                let is_dir = metadata.is_dir();
+                let size_bytes = if is_dir { 0 } else { metadata.len() };
+                let modified_ms = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+
+                raw_entries.push((file_name, path_str, is_dir, size_bytes, modified_ms));
+            }
+        }
+
+        // Sort descending by modified_ms (most recently downloaded/modified first)
+        raw_entries.sort_by_key(|a| std::cmp::Reverse(a.4));
+        raw_entries.truncate(limit);
+
+        let result: Vec<FolderFileEntry> = raw_entries
+            .into_iter()
+            .map(|(name, file_path, is_dir, size_bytes, modified_ms)| {
+                let icon = icon_for_path(&file_path);
+                FolderFileEntry {
+                    name,
+                    path: file_path,
+                    is_dir,
+                    size_bytes,
+                    modified_ms,
+                    icon,
+                }
+            })
+            .collect();
+
+        if com_initialized {
+            unsafe { CoUninitialize() };
+        }
+
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,5 +664,18 @@ mod tests {
         );
         assert!(parse_custom_folders("not json").is_empty());
         assert!(parse_custom_folders("[{\"name\":\"x\"}]").is_empty());
+    }
+
+    #[test]
+    fn sorts_folder_stack_entries_by_modified_time() {
+        let mut entries = [
+            ("old.txt", "C:\\test\\old.txt", false, 100u64, 1000i64),
+            ("newest.png", "C:\\test\\newest.png", false, 500u64, 5000i64),
+            ("middle.pdf", "C:\\test\\middle.pdf", false, 250u64, 3000i64),
+        ];
+        entries.sort_by_key(|a| std::cmp::Reverse(a.4));
+        assert_eq!(entries[0].0, "newest.png");
+        assert_eq!(entries[1].0, "middle.pdf");
+        assert_eq!(entries[2].0, "old.txt");
     }
 }

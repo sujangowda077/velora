@@ -18,7 +18,10 @@ import {
 	FolderOpen,
 	FolderPlus,
 	Plus,
-	X
+	X,
+	Bell,
+	History,
+	ZoomIn
 } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import {
@@ -135,6 +138,14 @@ interface DockTabProps {
 	handleRemoveDockExtraFolder: (path: string) => void;
 	startIcon: string;
 	handleStartIconChange: (icon: string) => void;
+	dockMagnification: boolean;
+	toggleDockMagnification: () => void;
+	dockFolderStacks: boolean;
+	toggleDockFolderStacks: () => void;
+	dockBadges: boolean;
+	toggleDockBadges: () => void;
+	dockShowRecents: boolean;
+	toggleDockShowRecents: () => void;
 }
 
 export function DockTab({
@@ -170,7 +181,15 @@ export function DockTab({
 	handleAddDockExtraFolder,
 	handleRemoveDockExtraFolder,
 	startIcon,
-	handleStartIconChange
+	handleStartIconChange,
+	dockMagnification,
+	toggleDockMagnification,
+	dockFolderStacks,
+	toggleDockFolderStacks,
+	dockBadges,
+	toggleDockBadges,
+	dockShowRecents,
+	toggleDockShowRecents
 }: DockTabProps) {
 	const handleStartIconUpload = (e: ChangeEvent<HTMLInputElement>) => {
 		const file = e.target.files?.[0];
@@ -237,6 +256,51 @@ export function DockTab({
 						<SettingRow icon={Eye} label="Show App Previews" desc="Show window thumbnails on hover">
 							<label className="toggle-switch">
 								<input type="checkbox" checked={dockPreviewEnabled} onChange={toggleDockPreview} />
+								<span className="slider"></span>
+							</label>
+						</SettingRow>
+
+						<SettingRow
+							icon={ZoomIn}
+							label="Dock Magnification"
+							desc="Fluid macOS-style parabolic scaling as your cursor glides across the dock"
+						>
+							<label className="toggle-switch">
+								<input
+									type="checkbox"
+									checked={dockMagnification}
+									onChange={toggleDockMagnification}
+								/>
+								<span className="slider"></span>
+							</label>
+						</SettingRow>
+
+						<SettingRow
+							icon={Bell}
+							label="Notification Badges"
+							desc="Show red badge count pills on apps with unread notifications"
+						>
+							<label className="toggle-switch">
+								<input
+									type="checkbox"
+									checked={dockBadges}
+									onChange={toggleDockBadges}
+								/>
+								<span className="slider"></span>
+							</label>
+						</SettingRow>
+
+						<SettingRow
+							icon={History}
+							label="Recent Applications"
+							desc="Show recently opened applications in a separate section on the right"
+						>
+							<label className="toggle-switch">
+								<input
+									type="checkbox"
+									checked={dockShowRecents}
+									onChange={toggleDockShowRecents}
+								/>
 								<span className="slider"></span>
 							</label>
 						</SettingRow>
@@ -318,6 +382,21 @@ export function DockTab({
 
 						{dockExtrasPosition !== "off" && (
 							<>
+								<SettingRow
+									icon={FolderOpen}
+									label="Folder Stacks"
+									desc="Clicking folders opens a macOS-style fan or grid preview of recent files"
+								>
+									<label className="toggle-switch">
+										<input
+											type="checkbox"
+											checked={dockFolderStacks}
+											onChange={toggleDockFolderStacks}
+										/>
+										<span className="slider"></span>
+									</label>
+								</SettingRow>
+
 								<SettingRow
 									icon={HardDrive}
 									label="Drives"

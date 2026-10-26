@@ -4,6 +4,7 @@ import { reloadIfMirrorWasStale } from "./hooks/settingsMirror";
 
 // Convert a hex color string to rgba with a specified alpha
 function hexToRgba(hex: string, alpha: number): string {
+	if (!hex || typeof hex !== "string") return `rgba(0, 122, 255, ${alpha})`;
 	hex = hex.replace("#", "");
 	if (hex.length === 3) {
 		hex = hex
@@ -11,6 +12,7 @@ function hexToRgba(hex: string, alpha: number): string {
 			.map((char) => char + char)
 			.join("");
 	}
+	if (hex.length !== 6) return `rgba(0, 122, 255, ${alpha})`;
 	const r = parseInt(hex.substring(0, 2), 16) || 0;
 	const g = parseInt(hex.substring(2, 4), 16) || 0;
 	const b = parseInt(hex.substring(4, 6), 16) || 0;
@@ -25,12 +27,18 @@ export interface HSL {
 
 // Convert Hex to HSL
 export function hexToHsl(hex: string): HSL {
+	if (!hex || typeof hex !== "string") {
+		return { h: 211, s: 100, l: 50 };
+	}
 	hex = hex.replace("#", "");
 	if (hex.length === 3) {
 		hex = hex
 			.split("")
 			.map((char) => char + char)
 			.join("");
+	}
+	if (hex.length !== 6) {
+		return { h: 211, s: 100, l: 50 };
 	}
 	const r = (parseInt(hex.substring(0, 2), 16) || 0) / 255;
 	const g = (parseInt(hex.substring(2, 4), 16) || 0) / 255;
@@ -108,29 +116,34 @@ function hslToHex(h: number, s: number, l: number): string {
 }
 
 export async function applyTheme(
-	mode: string,
-	customColor: string,
+	mode?: string,
+	customColor?: string,
 	opacity?: number,
 	saturation?: number,
 	brightness?: number
 ) {
 	const root = document.documentElement;
 
-	if (opacity === undefined || opacity === null) {
+	if (!mode) {
+		mode = localStorage.getItem("velora-theme-mode") || "dark";
+	}
+
+	if (opacity === undefined || opacity === null || isNaN(opacity)) {
 		const cachedOpacity = localStorage.getItem("velora-theme-opacity");
-		opacity = cachedOpacity !== null ? parseFloat(cachedOpacity) : 0.8;
+		opacity = cachedOpacity !== null && !isNaN(parseFloat(cachedOpacity)) ? parseFloat(cachedOpacity) : 0.8;
 	}
 
-	if (saturation === undefined || saturation === null) {
+	if (saturation === undefined || saturation === null || isNaN(saturation)) {
 		const cachedSaturation = localStorage.getItem("velora-theme-saturation");
-		saturation = cachedSaturation !== null ? parseFloat(cachedSaturation) : 0.5;
+		saturation = cachedSaturation !== null && !isNaN(parseFloat(cachedSaturation)) ? parseFloat(cachedSaturation) : 0.5;
 	}
 
-	if (brightness === undefined || brightness === null) {
+	if (brightness === undefined || brightness === null || isNaN(brightness)) {
 		const cachedBrightness = localStorage.getItem("velora-theme-brightness");
-		brightness = cachedBrightness !== null ? parseFloat(cachedBrightness) : 0.15;
+		brightness = cachedBrightness !== null && !isNaN(parseFloat(cachedBrightness)) ? parseFloat(cachedBrightness) : 0.15;
 	}
 
+	const color = customColor || localStorage.getItem("velora-theme-color") || "#007aff";
 	const op = opacity;
 	const opExpanded = Math.min(1.0, opacity + 0.12);
 
@@ -148,7 +161,7 @@ export async function applyTheme(
 		root.classList.add("theme-light");
 		root.classList.remove("theme-dark", "theme-custom", "theme-adaptive");
 	} else if (mode === "custom") {
-		const hsl = hexToHsl(customColor);
+		const hsl = hexToHsl(color);
 		hsl.s = saturation * 100;
 		hsl.l = brightness * 100;
 		const finalBgColor = hslToHex(hsl.h, hsl.s, hsl.l);
@@ -169,7 +182,7 @@ export async function applyTheme(
 			"--velora-group-bg",
 			isLight ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)"
 		);
-		root.style.setProperty("--velora-accent", customColor);
+		root.style.setProperty("--velora-accent", color);
 		root.style.setProperty(
 			"--velora-scrollbar-thumb",
 			isLight ? "rgba(0, 0, 0, 0.15)" : "rgba(255, 255, 255, 0.15)"
@@ -223,7 +236,7 @@ export async function applyTheme(
 			}
 		} catch (e) {
 			console.error("Failed to apply adaptive theme:", e);
-			applyTheme("dark", customColor, op, saturation, brightness);
+			applyTheme("dark", color, op, saturation, brightness);
 		}
 	} else {
 		// default/dark
@@ -246,11 +259,11 @@ export function initTheme() {
 	const syncMode = localStorage.getItem("velora-theme-mode") || "dark";
 	const syncColor = localStorage.getItem("velora-theme-color") || "#007aff";
 	const syncOpacityVal = localStorage.getItem("velora-theme-opacity");
-	const syncOpacity = syncOpacityVal !== null ? parseFloat(syncOpacityVal) : 0.8;
+	const syncOpacity = syncOpacityVal !== null && !isNaN(parseFloat(syncOpacityVal)) ? parseFloat(syncOpacityVal) : 0.8;
 	const syncSaturationVal = localStorage.getItem("velora-theme-saturation");
-	const syncSaturation = syncSaturationVal !== null ? parseFloat(syncSaturationVal) : 0.5;
+	const syncSaturation = syncSaturationVal !== null && !isNaN(parseFloat(syncSaturationVal)) ? parseFloat(syncSaturationVal) : 0.5;
 	const syncBrightnessVal = localStorage.getItem("velora-theme-brightness");
-	const syncBrightness = syncBrightnessVal !== null ? parseFloat(syncBrightnessVal) : 0.15;
+	const syncBrightness = syncBrightnessVal !== null && !isNaN(parseFloat(syncBrightnessVal)) ? parseFloat(syncBrightnessVal) : 0.15;
 
 	// Fast synchronous draw using cached localStorage
 	applyTheme(syncMode, syncColor, syncOpacity, syncSaturation, syncBrightness);
@@ -264,13 +277,13 @@ export function initTheme() {
 			const color = settings["velora-theme-color"]
 				? String(settings["velora-theme-color"])
 				: syncColor;
-			const opacityVal = settings["velora-theme-opacity"]
+			const opacityVal = settings["velora-theme-opacity"] !== undefined && !isNaN(parseFloat(String(settings["velora-theme-opacity"])))
 				? parseFloat(String(settings["velora-theme-opacity"]))
 				: syncOpacity;
-			const saturationVal = settings["velora-theme-saturation"]
+			const saturationVal = settings["velora-theme-saturation"] !== undefined && !isNaN(parseFloat(String(settings["velora-theme-saturation"])))
 				? parseFloat(String(settings["velora-theme-saturation"]))
 				: syncSaturation;
-			const brightnessVal = settings["velora-theme-brightness"]
+			const brightnessVal = settings["velora-theme-brightness"] !== undefined && !isNaN(parseFloat(String(settings["velora-theme-brightness"])))
 				? parseFloat(String(settings["velora-theme-brightness"]))
 				: syncBrightness;
 
@@ -295,9 +308,12 @@ export function initTheme() {
 	const applyThemeFromStorage = () => {
 		const mode = localStorage.getItem("velora-theme-mode") || "dark";
 		const color = localStorage.getItem("velora-theme-color") || "#007aff";
-		const opacity = parseFloat(localStorage.getItem("velora-theme-opacity") || "0.80");
-		const saturation = parseFloat(localStorage.getItem("velora-theme-saturation") || "0.50");
-		const brightness = parseFloat(localStorage.getItem("velora-theme-brightness") || "0.15");
+		const opacityVal = localStorage.getItem("velora-theme-opacity");
+		const opacity = opacityVal !== null && !isNaN(parseFloat(opacityVal)) ? parseFloat(opacityVal) : 0.8;
+		const saturationVal = localStorage.getItem("velora-theme-saturation");
+		const saturation = saturationVal !== null && !isNaN(parseFloat(saturationVal)) ? parseFloat(saturationVal) : 0.5;
+		const brightnessVal = localStorage.getItem("velora-theme-brightness");
+		const brightness = brightnessVal !== null && !isNaN(parseFloat(brightnessVal)) ? parseFloat(brightnessVal) : 0.15;
 		applyTheme(mode, color, opacity, saturation, brightness);
 	};
 
@@ -310,10 +326,14 @@ export function initTheme() {
 	];
 
 	// Listen to setting changes broadcasted from settings window
-	// (localStorage sync is handled by saveAndLocal in Settings.tsx; we just apply the theme)
 	const settingsPromise = listen<{ key: string; value: any }>("settings-changed", (event) => {
-		const { key } = event.payload;
+		const { key, value } = event.payload;
 		if (veloraThemeKeys.includes(key)) {
+			if (value !== null && value !== undefined) {
+				localStorage.setItem(key, String(value));
+			} else {
+				localStorage.removeItem(key);
+			}
 			applyThemeFromStorage();
 		}
 	});
@@ -322,20 +342,27 @@ export function initTheme() {
 	const accentPromise = listen<string>("system-accent-changed", (event) => {
 		const currentMode = localStorage.getItem("velora-theme-mode") || "dark";
 		if (currentMode === "adaptive") {
-			const opacity = parseFloat(localStorage.getItem("velora-theme-opacity") || "0.80");
-			const saturation = parseFloat(localStorage.getItem("velora-theme-saturation") || "0.50");
-			const brightness = parseFloat(localStorage.getItem("velora-theme-brightness") || "0.15");
+			const opacityVal = localStorage.getItem("velora-theme-opacity");
+			const opacity = opacityVal !== null && !isNaN(parseFloat(opacityVal)) ? parseFloat(opacityVal) : 0.8;
+			const saturationVal = localStorage.getItem("velora-theme-saturation");
+			const saturation = saturationVal !== null && !isNaN(parseFloat(saturationVal)) ? parseFloat(saturationVal) : 0.5;
+			const brightnessVal = localStorage.getItem("velora-theme-brightness");
+			const brightness = brightnessVal !== null && !isNaN(parseFloat(brightnessVal)) ? parseFloat(brightnessVal) : 0.15;
 			applyTheme("adaptive", event.payload, opacity, saturation, brightness);
 		}
 	});
 
 	// Listen to external edits (e.g. settings.json edited outside the app)
-	// localStorage sync is handled by useSettingsSync hook; we just apply the theme
 	const externalPromise = listen<{ key: string; value: any }>(
 		"settings-external-changed",
 		(event) => {
-			const { key } = event.payload;
+			const { key, value } = event.payload;
 			if (veloraThemeKeys.includes(key)) {
+				if (value !== null && value !== undefined) {
+					localStorage.setItem(key, String(value));
+				} else {
+					localStorage.removeItem(key);
+				}
 				applyThemeFromStorage();
 			}
 		}

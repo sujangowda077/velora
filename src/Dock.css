@@ -779,3 +779,245 @@ body {
 	background: #888;
 	box-shadow: none;
 }
+
+/* Notification Badge */
+.dock-badge {
+	position: absolute;
+	top: -4px;
+	right: -4px;
+	min-width: 18px;
+	height: 18px;
+	border-radius: 9px;
+	background: linear-gradient(135deg, #ff453a 0%, #d70015 100%);
+	color: #ffffff;
+	font-size: 10px;
+	font-weight: 700;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0 4px;
+	box-sizing: border-box;
+	box-shadow: 0 2px 8px rgba(255, 59, 48, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.4);
+	border: 1.5px solid rgba(255, 255, 255, 0.35);
+	z-index: 10;
+	pointer-events: none;
+	user-select: none;
+	letter-spacing: -0.02em;
+}
+
+/* Folder Stacks / Fan Popover */
+.folder-stack-popover {
+	position: absolute;
+	bottom: calc(100% + 18px);
+	transform: translateX(-50%);
+	background: rgba(24, 24, 27, 0.90);
+	backdrop-filter: blur(28px) saturate(190%);
+	-webkit-backdrop-filter: blur(28px) saturate(190%);
+	border: 1px solid rgba(255, 255, 255, 0.16);
+	border-radius: 18px;
+	padding: 14px;
+	box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+	z-index: 150;
+	color: white;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	pointer-events: auto;
+	transform-origin: bottom center;
+}
+
+.folder-stack-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0 4px 6px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+	gap: 16px;
+}
+
+.folder-stack-title-group {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.folder-stack-icon {
+	width: 24px;
+	height: 24px;
+	object-fit: contain;
+}
+
+.folder-stack-title {
+	font-size: 13px;
+	font-weight: 600;
+	color: rgba(255, 255, 255, 0.95);
+	letter-spacing: -0.01em;
+}
+
+.folder-stack-count {
+	font-size: 11px;
+	color: rgba(255, 255, 255, 0.5);
+}
+
+.folder-stack-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.folder-stack-mode-btn {
+	background: rgba(255, 255, 255, 0.08);
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	border-radius: 6px;
+	color: rgba(255, 255, 255, 0.7);
+	padding: 4px 8px;
+	font-size: 11px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: all 0.15s ease;
+}
+
+.folder-stack-mode-btn.active,
+.folder-stack-mode-btn:hover {
+	background: rgba(255, 255, 255, 0.18);
+	color: white;
+	border-color: rgba(255, 255, 255, 0.25);
+}
+
+.folder-stack-grid {
+	display: grid;
+	grid-template-columns: repeat(4, 96px);
+	gap: 10px;
+	max-height: 380px;
+	overflow-y: auto;
+	padding: 4px;
+}
+
+.folder-stack-item {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	text-align: center;
+	padding: 8px 6px;
+	border-radius: 10px;
+	background: rgba(255, 255, 255, 0.04);
+	border: 1px solid transparent;
+	cursor: pointer;
+	transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+	gap: 6px;
+}
+
+.folder-stack-item:hover {
+	background: rgba(255, 255, 255, 0.14);
+	border-color: rgba(255, 255, 255, 0.22);
+	transform: translateY(-3px) scale(1.03);
+	box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+.folder-stack-item img {
+	width: 44px;
+	height: 44px;
+	object-fit: contain;
+	filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.4));
+}
+
+.folder-stack-item-name {
+	font-size: 11px;
+	font-weight: 500;
+	color: rgba(255, 255, 255, 0.9);
+	max-width: 86px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.folder-stack-item-size {
+	font-size: 9px;
+	color: rgba(255, 255, 255, 0.45);
+}
+
+/* Fan View */
+.folder-stack-fan {
+	display: flex;
+	flex-direction: column-reverse;
+	gap: 6px;
+	padding: 4px 6px;
+	min-width: 270px;
+	max-width: 340px;
+}
+
+.folder-stack-fan-item {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 12px;
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.06);
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	cursor: pointer;
+	transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.folder-stack-fan-item:hover {
+	background: rgba(255, 255, 255, 0.18);
+	border-color: rgba(255, 255, 255, 0.25);
+	transform: translateX(6px) scale(1.02);
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+.folder-stack-fan-item img {
+	width: 32px;
+	height: 32px;
+	object-fit: contain;
+	flex-shrink: 0;
+}
+
+.folder-stack-fan-item-info {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	text-align: left;
+}
+
+.folder-stack-fan-item-name {
+	font-size: 12px;
+	font-weight: 500;
+	color: rgba(255, 255, 255, 0.95);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.folder-stack-footer {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding-top: 6px;
+	border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.folder-stack-open-btn {
+	background: rgba(255, 255, 255, 0.08);
+	border: 1px solid rgba(255, 255, 255, 0.12);
+	border-radius: 8px;
+	color: rgba(255, 255, 255, 0.85);
+	font-size: 12px;
+	font-weight: 500;
+	padding: 6px 14px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	transition: all 0.15s ease;
+	width: 100%;
+	justify-content: center;
+}
+
+.folder-stack-open-btn:hover {
+	background: rgba(255, 255, 255, 0.16);
+	color: white;
+	border-color: rgba(255, 255, 255, 0.24);
+}
+

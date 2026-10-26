@@ -46,7 +46,15 @@ body {
 	justify-content: space-between;
 	align-items: center;
 	padding: 16px 18px 10px 18px;
-	-webkit-app-region: drag; /* Native drag handle */
+}
+
+.title-bar-drag {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	height: 100%;
+	-webkit-app-region: drag;
+	cursor: grab;
 }
 
 .title-text {
@@ -59,7 +67,8 @@ body {
 }
 
 .close-btn {
-	-webkit-app-region: no-drag; /* Exclude from drag */
+	-webkit-app-region: no-drag !important;
+	pointer-events: auto !important;
 	background: rgba(255, 255, 255, 0.08);
 	border: none;
 	color: var(--velora-text, rgba(255, 255, 255, 0.8));
@@ -78,6 +87,10 @@ body {
 	background: rgba(255, 255, 255, 0.15);
 	color: white;
 	transform: scale(1.05);
+}
+
+.close-btn:active {
+	transform: scale(0.95);
 }
 
 .close-btn-icon {

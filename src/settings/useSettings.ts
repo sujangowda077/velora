@@ -6,7 +6,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import type { UpdateCheckResult } from "../updater";
 import { useSettingsSync } from "../hooks/useSettingsSync";
 import { reloadIfMirrorWasStale } from "../hooks/settingsMirror";
-import { hexToHsl } from "../theme";
+import { applyTheme, hexToHsl } from "../theme";
 import {
 	addCustomFolder,
 	removeCustomFolder,
@@ -95,6 +95,18 @@ export function useSettings() {
 	);
 	const [dockWinNumberEnabled, setDockWinNumberEnabled] = useState(
 		() => localStorage.getItem("velora-dock-win-number-enabled") !== "false"
+	);
+	const [dockMagnification, setDockMagnification] = useState(
+		() => localStorage.getItem("velora-dock-magnification") !== "false"
+	);
+	const [dockFolderStacks, setDockFolderStacks] = useState(
+		() => localStorage.getItem("velora-dock-folder-stacks") !== "false"
+	);
+	const [dockBadges, setDockBadges] = useState(
+		() => localStorage.getItem("velora-dock-badges") !== "false"
+	);
+	const [dockShowRecents, setDockShowRecents] = useState(
+		() => localStorage.getItem("velora-dock-show-recents") !== "false"
 	);
 	const [dockExtrasPosition, setDockExtrasPosition] = useState(
 		() => localStorage.getItem("velora-dock-extras-position") || "off"
@@ -347,6 +359,10 @@ export function useSettings() {
 		"velora-dock-separator-enabled": setDockSeparatorEnabled,
 		"velora-start-icon": setStartIcon,
 		"velora-dock-preview-enabled": setDockPreviewEnabled,
+		"velora-dock-magnification": setDockMagnification,
+		"velora-dock-folder-stacks": setDockFolderStacks,
+		"velora-dock-badges": setDockBadges,
+		"velora-dock-show-recents": setDockShowRecents,
 		"velora-dock-adaptive": setDockAdaptive,
 		"velora-dock-win-number-enabled": setDockWinNumberEnabled,
 		"velora-dock-extras-position": setDockExtrasPosition,
@@ -661,6 +677,30 @@ export function useSettings() {
 		saveSetting("velora-dock-win-number-enabled", String(next));
 	};
 
+	const toggleDockMagnification = () => {
+		const next = !dockMagnification;
+		setDockMagnification(next);
+		saveSetting("velora-dock-magnification", String(next));
+	};
+
+	const toggleDockFolderStacks = () => {
+		const next = !dockFolderStacks;
+		setDockFolderStacks(next);
+		saveSetting("velora-dock-folder-stacks", String(next));
+	};
+
+	const toggleDockBadges = () => {
+		const next = !dockBadges;
+		setDockBadges(next);
+		saveSetting("velora-dock-badges", String(next));
+	};
+
+	const toggleDockShowRecents = () => {
+		const next = !dockShowRecents;
+		setDockShowRecents(next);
+		saveSetting("velora-dock-show-recents", String(next));
+	};
+
 	const handleDockExtrasPositionChange = (position: string) => {
 		setDockExtrasPosition(position);
 		saveSetting("velora-dock-extras-position", position);
@@ -765,50 +805,72 @@ export function useSettings() {
 	// ── Theme handlers ──
 	const handleThemeModeChange = async (mode: string) => {
 		setThemeMode(mode);
+		localStorage.setItem("velora-theme-mode", mode);
 		saveSetting("velora-theme-mode", mode);
 
 		if (mode === "adaptive") {
 			try {
 				const accentHex = await invoke<string>("get_system_accent_color");
 				const hsl = hexToHsl(accentHex);
-				setThemeSaturation(hsl.s / 100);
-				saveSetting("velora-theme-saturation", String(hsl.s / 100));
-				setThemeBrightness(hsl.l / 100);
-				saveSetting("velora-theme-brightness", String(hsl.l / 100));
+				const sat = hsl.s / 100;
+				const bri = hsl.l / 100;
+				setThemeSaturation(sat);
+				localStorage.setItem("velora-theme-saturation", String(sat));
+				saveSetting("velora-theme-saturation", String(sat));
+				setThemeBrightness(bri);
+				localStorage.setItem("velora-theme-brightness", String(bri));
+				saveSetting("velora-theme-brightness", String(bri));
+				applyTheme("adaptive", accentHex, themeOpacity, sat, bri);
 			} catch (e) {
 				console.error("Failed to parse adaptive accent HSL:", e);
+				applyTheme("adaptive", themeColor, themeOpacity, themeSaturation, themeBrightness);
 			}
+		} else {
+			applyTheme(mode, themeColor, themeOpacity, themeSaturation, themeBrightness);
 		}
 	};
 
 	const handleThemeColorChange = (color: string) => {
 		setThemeColor(color);
+		localStorage.setItem("velora-theme-color", color);
 		saveSetting("velora-theme-color", color);
 
 		try {
 			const hsl = hexToHsl(color);
-			setThemeSaturation(hsl.s / 100);
-			saveSetting("velora-theme-saturation", String(hsl.s / 100));
-			setThemeBrightness(hsl.l / 100);
-			saveSetting("velora-theme-brightness", String(hsl.l / 100));
+			const sat = hsl.s / 100;
+			const bri = hsl.l / 100;
+			setThemeSaturation(sat);
+			localStorage.setItem("velora-theme-saturation", String(sat));
+			saveSetting("velora-theme-saturation", String(sat));
+			setThemeBrightness(bri);
+			localStorage.setItem("velora-theme-brightness", String(bri));
+			saveSetting("velora-theme-brightness", String(bri));
+			applyTheme(themeMode, color, themeOpacity, sat, bri);
 		} catch (e) {
 			console.error("Failed to parse custom color HSL:", e);
+			applyTheme(themeMode, color, themeOpacity, themeSaturation, themeBrightness);
 		}
 	};
 
 	const handleOpacityChange = (value: number) => {
 		setThemeOpacity(value);
+		localStorage.setItem("velora-theme-opacity", String(value));
 		saveSetting("velora-theme-opacity", String(value));
+		applyTheme(themeMode, themeColor, value, themeSaturation, themeBrightness);
 	};
 
 	const handleSaturationChange = (value: number) => {
 		setThemeSaturation(value);
+		localStorage.setItem("velora-theme-saturation", String(value));
 		saveSetting("velora-theme-saturation", String(value));
+		applyTheme(themeMode, themeColor, themeOpacity, value, themeBrightness);
 	};
 
 	const handleBrightnessChange = (value: number) => {
 		setThemeBrightness(value);
+		localStorage.setItem("velora-theme-brightness", String(value));
 		saveSetting("velora-theme-brightness", String(value));
+		applyTheme(themeMode, themeColor, themeOpacity, themeSaturation, value);
 	};
 
 	// ── City search ──
@@ -999,6 +1061,14 @@ export function useSettings() {
 		toggleDockSeparator,
 		startIcon,
 		handleStartIconChange,
+		dockMagnification,
+		toggleDockMagnification,
+		dockFolderStacks,
+		toggleDockFolderStacks,
+		dockBadges,
+		toggleDockBadges,
+		dockShowRecents,
+		toggleDockShowRecents,
 		dockAdaptive,
 		toggleDockAdaptive,
 		dockWinNumberEnabled,

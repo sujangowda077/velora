@@ -34,6 +34,15 @@ export function useSettingsSync(
 	useEffect(() => {
 		const unlistenSC = listen<{ key: string; value: any }>("settings-changed", (event) => {
 			const { key, value } = event.payload;
+
+			if (key === "velora-weather-lat" || key === "velora-weather-lon") {
+				localStorage.removeItem(key);
+			} else if (value !== null && value !== undefined) {
+				localStorage.setItem(key, String(value));
+			} else {
+				localStorage.removeItem(key);
+			}
+
 			const handler = handlersRef.current[key];
 			if (handler && value !== null && value !== undefined) {
 				handler(convertSettingValue(value));

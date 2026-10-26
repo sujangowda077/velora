@@ -12,6 +12,15 @@ export interface CustomFolder {
 	path: string;
 }
 
+export interface FolderFileEntry {
+	name: string;
+	path: string;
+	is_dir: boolean;
+	size_bytes: number;
+	modified_ms: number;
+	icon: string | null;
+}
+
 export const KNOWN_FOLDER_OPTIONS = [
 	{ id: "desktop", label: "Desktop" },
 	{ id: "downloads", label: "Downloads" },
