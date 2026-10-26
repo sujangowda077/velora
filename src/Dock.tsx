@@ -1440,20 +1440,74 @@ const Dock = memo(function Dock() {
 		const handleBlur = () => {
 			closeMenu();
 			closePopup();
+			if (previewLeaveTimerRef.current) clearTimeout(previewLeaveTimerRef.current);
+			setPreviewData(null);
+			setHoveredApp(null);
 		};
 		window.addEventListener("blur", handleBlur);
-		return () => window.removeEventListener("blur", handleBlur);
+		return () => {
+			window.removeEventListener("blur", handleBlur);
+			if (previewLeaveTimerRef.current) clearTimeout(previewLeaveTimerRef.current);
+		};
 	}, []);
+
+	const previewLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const handleAppMouseEnter = (appKey: string) => {
+		if (previewLeaveTimerRef.current) {
+			clearTimeout(previewLeaveTimerRef.current);
+			previewLeaveTimerRef.current = null;
+		}
+		isPreviewHoveredRef.current = false;
+		if (hoveredApp !== appKey) {
+			setPreviewData(null);
+		}
+		setHoveredApp(appKey);
+	};
+
+	const handleAppMouseLeave = () => {
+		if (previewLeaveTimerRef.current) {
+			clearTimeout(previewLeaveTimerRef.current);
+		}
+		previewLeaveTimerRef.current = setTimeout(() => {
+			if (!isPreviewHoveredRef.current) {
+				setHoveredApp(null);
+				setPressedApp(null);
+				setPreviewData(null);
+			}
+		}, 200);
+	};
+
+	const handlePreviewMouseEnter = () => {
+		if (previewLeaveTimerRef.current) {
+			clearTimeout(previewLeaveTimerRef.current);
+			previewLeaveTimerRef.current = null;
+		}
+		isPreviewHoveredRef.current = true;
+	};
+
+	const handlePreviewMouseLeave = () => {
+		isPreviewHoveredRef.current = false;
+		if (previewLeaveTimerRef.current) {
+			clearTimeout(previewLeaveTimerRef.current);
+		}
+		previewLeaveTimerRef.current = setTimeout(() => {
+			setHoveredApp(null);
+			setPressedApp(null);
+			setPreviewData(null);
+		}, 200);
+	};
 
 	useEffect(() => {
 		if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
-		isPreviewHoveredRef.current = false;
 		hoveredAppRef.current = hoveredApp;
 
 		if (!hoveredApp) {
 			const timer = setTimeout(() => setPreviewData(null), 250);
 			return () => clearTimeout(timer);
 		}
+
+		setPreviewData((prev) => (prev && prev.id !== hoveredApp ? null : prev));
 
 		if (hoveredApp && !isDragging) {
 			const app = dockItems.find((a) => itemKey(a) === hoveredApp);
@@ -1535,11 +1589,8 @@ const Dock = memo(function Dock() {
 			exit={{ opacity: 0, scale: 0, transition: { duration: 0.12 } }}
 			className="dock-icon-wrapper"
 			onContextMenu={(e) => handleExtraContextMenu(e, extra)}
-			onMouseEnter={() => setHoveredApp(extra.id)}
-			onMouseLeave={() => {
-				setHoveredApp(null);
-				setPressedApp(null);
-			}}
+			onMouseEnter={() => handleAppMouseEnter(extra.id)}
+			onMouseLeave={handleAppMouseLeave}
 			onMouseDown={(e) => {
 				if (e.button === 1) e.preventDefault();
 			}}
@@ -1588,8 +1639,7 @@ const Dock = memo(function Dock() {
 					onMouseLeave={() => {
 						mouseX.set(Infinity);
 						setIsDockHovered(false);
-						setHoveredApp(null);
-						setPressedApp(null);
+						handleAppMouseLeave();
 					}}
 					initial={{
 						y: -800,
@@ -1678,11 +1728,8 @@ const Dock = memo(function Dock() {
 										}}
 										className="dock-icon-wrapper"
 										onContextMenu={(e) => handleContextMenu(e, startItem)}
-										onMouseEnter={() => setHoveredApp(itemKey(startItem))}
-										onMouseLeave={() => {
-											setHoveredApp(null);
-											setPressedApp(null);
-										}}
+										onMouseEnter={() => handleAppMouseEnter(itemKey(startItem))}
+										onMouseLeave={handleAppMouseLeave}
 									>
 										{(!dockPreviewEnabled ||
 											(dockPreviewEnabled && hoveredApp === itemKey(startItem))) && (
@@ -1727,11 +1774,8 @@ const Dock = memo(function Dock() {
 											e.preventDefault();
 											setContextMenu({ x: e.clientX, y: e.clientY, app: null, taskView: true });
 										}}
-										onMouseEnter={() => setHoveredApp("task-view")}
-										onMouseLeave={() => {
-											setHoveredApp(null);
-											setPressedApp(null);
-										}}
+										onMouseEnter={() => handleAppMouseEnter("task-view")}
+										onMouseLeave={handleAppMouseLeave}
 									>
 										{(!dockPreviewEnabled || hoveredApp === "task-view") && (
 											<div className="tooltip">Task View</div>
@@ -1781,8 +1825,10 @@ const Dock = memo(function Dock() {
 											style={{ position: "relative" }}
 											onDragStart={() => {
 												setIsDragging(true);
+												if (previewLeaveTimerRef.current) clearTimeout(previewLeaveTimerRef.current);
 												setHoveredApp(null);
 												setPressedApp(null);
+												setPreviewData(null);
 											}}
 											onDragEnd={handleDragEnd}
 											onContextMenu={(e) => handleContextMenu(e, app)}
@@ -1801,13 +1847,8 @@ const Dock = memo(function Dock() {
 												animate={ITEM_ANIMATE}
 												exit={ITEM_EXIT}
 												transition={ITEM_ENTRY_TRANSITION}
-												onMouseEnter={() => setHoveredApp(itemKey(app))}
-												onMouseLeave={() => {
-													if (!isPreviewHoveredRef.current) {
-														setHoveredApp(null);
-														setPressedApp(null);
-													}
-												}}
+												onMouseEnter={() => handleAppMouseEnter(itemKey(app))}
+												onMouseLeave={handleAppMouseLeave}
 											>
 												<AnimatePresence>
 													{dockPreviewEnabled &&
@@ -1820,21 +1861,19 @@ const Dock = memo(function Dock() {
 																animate={{ opacity: 1, y: 0, scale: 1 }}
 																exit={{ opacity: 0, scale: 0.95 }}
 																transition={{ duration: 0.15 }}
-																onMouseEnter={() => {
-																	isPreviewHoveredRef.current = true;
-																}}
-																onMouseLeave={() => {
-																	isPreviewHoveredRef.current = false;
-																	setHoveredApp(null);
-																	setPressedApp(null);
-																}}
+																onMouseEnter={handlePreviewMouseEnter}
+																onMouseLeave={handlePreviewMouseLeave}
 															>
 																<div className="preview-items">
 																	{previewData.previews.map((prev, idx) => (
 																		<div
 																			key={prev.hwnd}
 																			className="preview-item"
-																			onClick={() => invoke("focus_window", { hwnd: prev.hwnd })}
+																			onClick={() => {
+																				invoke("focus_window", { hwnd: prev.hwnd });
+																				setPreviewData(null);
+																				setHoveredApp(null);
+																			}}
 																		>
 																			{prev.image ? (
 																				<img src={prev.image} alt={`Preview ${idx}`} />
@@ -1971,13 +2010,8 @@ const Dock = memo(function Dock() {
 										exit={{ opacity: 0, scale: 0, transition: { duration: 0.12 } }}
 										className="dock-icon-wrapper"
 										onContextMenu={(e) => handleContextMenu(e, app)}
-										onMouseEnter={() => setHoveredApp(itemKey(app))}
-										onMouseLeave={() => {
-											if (!isPreviewHoveredRef.current) {
-												setHoveredApp(null);
-												setPressedApp(null);
-											}
-										}}
+										onMouseEnter={() => handleAppMouseEnter(itemKey(app))}
+										onMouseLeave={handleAppMouseLeave}
 										onMouseDown={(e) => {
 											if (e.button === 1) e.preventDefault();
 										}}
@@ -1998,21 +2032,19 @@ const Dock = memo(function Dock() {
 														animate={{ opacity: 1, y: 0, scale: 1 }}
 														exit={{ opacity: 0, scale: 0.95 }}
 														transition={{ duration: 0.15 }}
-														onMouseEnter={() => {
-															isPreviewHoveredRef.current = true;
-														}}
-														onMouseLeave={() => {
-															isPreviewHoveredRef.current = false;
-															setHoveredApp(null);
-															setPressedApp(null);
-														}}
+														onMouseEnter={handlePreviewMouseEnter}
+														onMouseLeave={handlePreviewMouseLeave}
 													>
 														<div className="preview-items">
 															{previewData.previews.map((prev, idx) => (
 																<div
 																	key={prev.hwnd}
 																	className="preview-item"
-																	onClick={() => invoke("focus_window", { hwnd: prev.hwnd })}
+																	onClick={() => {
+																		invoke("focus_window", { hwnd: prev.hwnd });
+																		setPreviewData(null);
+																		setHoveredApp(null);
+																	}}
 																>
 																	{prev.image ? (
 																		<img src={prev.image} alt={`Preview ${idx}`} />
