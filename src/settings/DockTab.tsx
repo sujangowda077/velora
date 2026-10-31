@@ -144,6 +144,8 @@ interface DockTabProps {
 	toggleDockFolderStacks: () => void;
 	dockBadges: boolean;
 	toggleDockBadges: () => void;
+	dockShowIndicators: boolean;
+	toggleDockShowIndicators: () => void;
 	dockShowRecents: boolean;
 	toggleDockShowRecents: () => void;
 }
@@ -188,6 +190,8 @@ export function DockTab({
 	toggleDockFolderStacks,
 	dockBadges,
 	toggleDockBadges,
+	dockShowIndicators,
+	toggleDockShowIndicators,
 	dockShowRecents,
 	toggleDockShowRecents
 }: DockTabProps) {
@@ -285,6 +289,21 @@ export function DockTab({
 									type="checkbox"
 									checked={dockBadges}
 									onChange={toggleDockBadges}
+								/>
+								<span className="slider"></span>
+							</label>
+						</SettingRow>
+
+						<SettingRow
+							icon={Circle}
+							label="Running Indicators"
+							desc="Show active running indicator dots below apps with open windows"
+						>
+							<label className="toggle-switch">
+								<input
+									type="checkbox"
+									checked={dockShowIndicators}
+									onChange={toggleDockShowIndicators}
 								/>
 								<span className="slider"></span>
 							</label>

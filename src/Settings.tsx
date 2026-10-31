@@ -272,6 +272,8 @@ function SettingsApp() {
 							toggleDockFolderStacks={settings.toggleDockFolderStacks}
 							dockBadges={settings.dockBadges}
 							toggleDockBadges={settings.toggleDockBadges}
+							dockShowIndicators={settings.dockShowIndicators}
+							toggleDockShowIndicators={settings.toggleDockShowIndicators}
 							dockShowRecents={settings.dockShowRecents}
 							toggleDockShowRecents={settings.toggleDockShowRecents}
 						/>

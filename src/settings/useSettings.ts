@@ -105,6 +105,9 @@ export function useSettings() {
 	const [dockBadges, setDockBadges] = useState(
 		() => localStorage.getItem("velora-dock-badges") !== "false"
 	);
+	const [dockShowIndicators, setDockShowIndicators] = useState(
+		() => localStorage.getItem("velora-dock-show-indicators") !== "false"
+	);
 	const [dockShowRecents, setDockShowRecents] = useState(
 		() => localStorage.getItem("velora-dock-show-recents") !== "false"
 	);
@@ -362,6 +365,7 @@ export function useSettings() {
 		"velora-dock-magnification": setDockMagnification,
 		"velora-dock-folder-stacks": setDockFolderStacks,
 		"velora-dock-badges": setDockBadges,
+		"velora-dock-show-indicators": setDockShowIndicators,
 		"velora-dock-show-recents": setDockShowRecents,
 		"velora-dock-adaptive": setDockAdaptive,
 		"velora-dock-win-number-enabled": setDockWinNumberEnabled,
@@ -693,6 +697,12 @@ export function useSettings() {
 		const next = !dockBadges;
 		setDockBadges(next);
 		saveSetting("velora-dock-badges", String(next));
+	};
+
+	const toggleDockShowIndicators = () => {
+		const next = !dockShowIndicators;
+		setDockShowIndicators(next);
+		saveSetting("velora-dock-show-indicators", String(next));
 	};
 
 	const toggleDockShowRecents = () => {
@@ -1067,6 +1077,8 @@ export function useSettings() {
 		toggleDockFolderStacks,
 		dockBadges,
 		toggleDockBadges,
+		dockShowIndicators,
+		toggleDockShowIndicators,
 		dockShowRecents,
 		toggleDockShowRecents,
 		dockAdaptive,

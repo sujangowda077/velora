@@ -360,8 +360,12 @@ body {
 .window-dots {
 	position: absolute;
 	bottom: -4px;
+	left: 50%;
+	transform: translateX(-50%);
 	display: flex;
 	gap: 3px;
+	pointer-events: none;
+	z-index: 2;
 }
 
 .window-dots .active-indicator {
